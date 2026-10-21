@@ -1,0 +1,4 @@
+*.db
+old_versions/
+__pycache__/
+*.bak

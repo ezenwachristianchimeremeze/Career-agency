@@ -2,3 +2,7 @@
 old_versions/
 __pycache__/
 *.bak
+*.db
+*.bak
+__pycache__/
+old_versions/

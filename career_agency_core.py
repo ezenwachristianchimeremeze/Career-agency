@@ -674,6 +674,12 @@ def register_core_api(app):
             return _json_error("VALIDATION_ERROR", "Years of experience must be a whole number.", 400)
         if years < 0 or years > 60:
             return _json_error("VALIDATION_ERROR", "Years of experience must be between 0 and 60.", 400)
+        org_name = str(data.get("organization_name", "")).strip()
+        agency = str(data.get("agency_name", "")).strip()
+        if user["role"] == "employer" and (not org_name or len(org_name) > 160):
+            return _json_error("VALIDATION_ERROR", "Organisation name is required.", 400)
+        if user["role"] == "recruiter" and (not agency or len(agency) > 160):
+            return _json_error("VALIDATION_ERROR", "Recruitment agency name is required.", 400)
         now = utc_now()
         with _connect() as db:
             db.execute("""INSERT INTO user_profiles(user_id,phone,country,city,headline,professional_summary,years_experience,created_at,updated_at)
@@ -683,18 +689,20 @@ def register_core_api(app):
                           years_experience=excluded.years_experience,updated_at=excluded.updated_at""",
                        (user["id"], phone, country, city, headline, summary, years, now, now))
             if user["role"] == "employer":
-                org_name = str(data.get("organization_name", "")).strip()
-                if not org_name or len(org_name) > 160:
-                    return _json_error("VALIDATION_ERROR", "Organisation name is required.", 400)
-                org_id = str(uuid.uuid4())
-                db.execute("INSERT INTO organizations(id,owner_user_id,name,website,country,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                           (org_id, user["id"], org_name, str(data.get("website", "")).strip()[:240] or None, country, now, now))
-                db.execute("INSERT INTO employer_profiles(user_id,organization_id,job_title,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET organization_id=excluded.organization_id,job_title=excluded.job_title,updated_at=excluded.updated_at",
-                           (user["id"], org_id, str(data.get("job_title", "")).strip()[:120] or None, now, now))
+                existing = db.execute("SELECT organization_id FROM employer_profiles WHERE user_id=?", (user["id"],)).fetchone()
+                if existing and existing["organization_id"]:
+                    org_id = existing["organization_id"]
+                    db.execute("UPDATE organizations SET name=?,website=?,country=?,updated_at=? WHERE id=? AND owner_user_id=?",
+                               (org_name, str(data.get("website", "")).strip()[:240] or None, country, now, org_id, user["id"]))
+                    db.execute("UPDATE employer_profiles SET job_title=?,updated_at=? WHERE user_id=?",
+                               (str(data.get("job_title", "")).strip()[:120] or None, now, user["id"]))
+                else:
+                    org_id = str(uuid.uuid4())
+                    db.execute("INSERT INTO organizations(id,owner_user_id,name,website,country,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                               (org_id, user["id"], org_name, str(data.get("website", "")).strip()[:240] or None, country, now, now))
+                    db.execute("INSERT INTO employer_profiles(user_id,organization_id,job_title,created_at,updated_at) VALUES(?,?,?,?,?)",
+                               (user["id"], org_id, str(data.get("job_title", "")).strip()[:120] or None, now, now))
             elif user["role"] == "recruiter":
-                agency = str(data.get("agency_name", "")).strip()
-                if not agency or len(agency) > 160:
-                    return _json_error("VALIDATION_ERROR", "Recruitment agency name is required.", 400)
                 db.execute("INSERT INTO recruiter_profiles(user_id,agency_name,client_focus,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET agency_name=excluded.agency_name,client_focus=excluded.client_focus,updated_at=excluded.updated_at",
                            (user["id"], agency, str(data.get("client_focus", "")).strip()[:240] or None, now, now))
         return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})

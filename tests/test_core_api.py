@@ -246,6 +246,21 @@ def test_wallet_screen_shows_balance_and_inactive_package_state(client):
     assert http.get("/workspace/modules/wallet").status_code == 302
 
 
+def test_notifications_are_scoped_and_can_be_marked_read(client):
+    http, db_path, _ = create_and_login(client)
+    with sqlite3.connect(db_path) as db:
+        user_id = db.execute("SELECT id FROM users WHERE email=?", ("candidate@example.com",)).fetchone()[0]
+        db.execute("INSERT INTO notifications(id,user_id,category,title,body,created_at) VALUES(?,?,?,?,?,?)",
+                   ("notice-test-1", user_id, "system", "Welcome", "Welcome to Career Agency.", "2026-10-31T00:00:00+00:00"))
+        db.commit()
+    items = http.get("/api/v1/notifications")
+    assert items.status_code == 200
+    assert items.get_json()["data"][0]["title"] == "Welcome"
+    read = post_json(http, "/api/v1/notifications/notice-test-1/read", {})
+    assert read.status_code == 200
+    assert http.get("/api/v1/notifications").get_json()["data"][0]["read_at"] is not None
+
+
 def test_cv_library_create_read_update_and_delete(client):
     http, _, _ = create_and_login(client)
     created = post_json(http, "/api/v1/cvs", {

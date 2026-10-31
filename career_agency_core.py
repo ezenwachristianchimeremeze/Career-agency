@@ -409,6 +409,11 @@ def register_core_api(app):
             return None
         if request.path == "/login":
             return redirect("/auth/login")
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path != "/api/v1/payments/paystack/webhook":
+            expected = session.get("csrf_token", "")
+            supplied = request.headers.get("X-CSRF-Token", "")
+            if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+                return _json_error("CSRF_VALIDATION_FAILED", "Refresh the page and try again.", 403)
         allowed = (
             request.path == "/auth/login"
             or request.path == "/auth/logout"
@@ -467,7 +472,7 @@ a{color:#93c5fd;text-decoration:none}.error{min-height:20px;color:#fca5a5;font-s
 <script>
 const form=document.getElementById('login'),btn=document.getElementById('submit'),err=document.getElementById('error');
 form.addEventListener('submit',async e=>{e.preventDefault();btn.disabled=true;btn.textContent='Signing in…';err.textContent='';
-try{const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
+try{const t=await fetch('/api/v1/auth/csrf').then(x=>x.json());const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':t.data.csrf_token},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
 const d=await r.json();if(!r.ok)throw new Error(d.error?.message||'Unable to sign in.');
 location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=false;btn.textContent='Sign in';}});
 </script></body></html>"""

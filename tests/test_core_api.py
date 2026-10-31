@@ -251,7 +251,7 @@ def test_root_is_login_first_then_onboarding_then_workspace(client):
     assert root.headers["Location"].endswith("/workspace")
     workspace = http.get("/workspace")
     assert workspace.status_code == 200
-    assert b"Welcome, Test Candidate" in workspace.data
+    assert b"Welcome back, Test Candidate" in workspace.data
 
 
 def test_onboarding_requires_country_before_completion(client):

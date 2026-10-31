@@ -168,6 +168,17 @@ def test_password_reset_invalidates_existing_sessions(client):
     assert response.status_code == 401
 
 
+def test_wallet_screen_shows_balance_and_inactive_package_state(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    wallet = http.get("/wallet")
+    assert wallet.status_code == 200
+    assert b"Career Credits wallet" in wallet.data
+    assert b"Credit packages are temporarily unavailable" in wallet.data
+    assert http.get("/workspace/modules/wallet").status_code == 302
+
+
 def test_profile_get_and_patch_are_user_scoped(client):
     http, _, _ = create_and_login(client)
     put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria", "city": "Port Harcourt"})

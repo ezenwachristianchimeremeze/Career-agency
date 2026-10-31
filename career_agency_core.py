@@ -700,7 +700,9 @@ def register_core_api(app):
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
-                             "/onboarding", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages"}
+                             "/onboarding", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
+                             "/api/v1/dashboard"}
+            or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")

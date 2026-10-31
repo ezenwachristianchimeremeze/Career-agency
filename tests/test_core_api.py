@@ -344,6 +344,34 @@ def test_published_job_can_be_saved_applied_to_and_withdrawn(client):
     assert http.get("/api/v1/applications").get_json()["data"][0]["status"] == "withdrawn"
 
 
+def test_recruiter_pipeline_requires_candidate_consent_and_tracks_stage(client):
+    http = create_role_user(client, "recruiter@example.com", "recruiter", "Test Recruiter")
+    put_json(http, "/api/v1/onboarding/profile", {
+        "country": "Nigeria",
+        "agency_name": "Talent Search Partners",
+        "client_focus": "Technology roles",
+    })
+    post_json(http, "/api/v1/onboarding/complete", {})
+    denied = post_json(http, "/api/v1/recruiter/pipeline", {
+        "candidate_name": "Candidate One",
+        "role_title": "Backend Engineer",
+    })
+    assert denied.status_code == 400
+    assert denied.get_json()["error"]["code"] == "CANDIDATE_CONSENT_REQUIRED"
+    created = post_json(http, "/api/v1/recruiter/pipeline", {
+        "candidate_name": "Candidate One",
+        "candidate_email": "candidate.one@example.com",
+        "role_title": "Backend Engineer",
+        "candidate_consent": True,
+    })
+    assert created.status_code == 201
+    item_id = created.get_json()["data"]["id"]
+    updated = patch_json(http, "/api/v1/recruiter/pipeline/" + item_id, {"pipeline_stage": "shortlisted"})
+    assert updated.status_code == 200
+    pipeline = http.get("/api/v1/recruiter/pipeline")
+    assert pipeline.get_json()["data"][0]["pipeline_stage"] == "shortlisted"
+
+
 def test_employer_can_create_draft_but_cannot_publish_unverified_organisation(client):
     http = create_role_user(client, "employer@example.com", "employer", "Test Employer")
     profile = put_json(http, "/api/v1/onboarding/profile", {

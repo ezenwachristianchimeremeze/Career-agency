@@ -163,6 +163,41 @@ def test_password_reset_invalidates_existing_sessions(client):
     assert response.status_code == 401
 
 
+def test_mobile_login_bearer_access_and_refresh_rotation(client):
+    http, _, _ = create_and_login(client)
+    login = http.post("/api/v1/mobile/auth/login", json={
+        "email": "candidate@example.com",
+        "password": "long-test-password-123",
+    })
+    assert login.status_code == 200
+    tokens = login.get_json()["data"]
+    access = tokens["access_token"]
+    refresh = tokens["refresh_token"]
+    wallet = http.get("/api/v1/wallet", headers={"Authorization": "Bearer " + access})
+    assert wallet.status_code == 200
+    rotated = http.post("/api/v1/mobile/auth/refresh", json={"refresh_token": refresh})
+    assert rotated.status_code == 200
+    new_tokens = rotated.get_json()["data"]
+    assert new_tokens["refresh_token"] != refresh
+    reused = http.post("/api/v1/mobile/auth/refresh", json={"refresh_token": refresh})
+    assert reused.status_code == 401
+    revoked_wallet = http.get("/api/v1/wallet", headers={"Authorization": "Bearer " + new_tokens["access_token"]})
+    assert revoked_wallet.status_code == 401
+
+
+def test_mobile_logout_revokes_access_and_refresh_family(client):
+    http, _, _ = create_and_login(client)
+    login = http.post("/api/v1/mobile/auth/login", json={
+        "email": "candidate@example.com",
+        "password": "long-test-password-123",
+    })
+    tokens = login.get_json()["data"]
+    logged_out = http.post("/api/v1/mobile/auth/logout", json={"refresh_token": tokens["refresh_token"]})
+    assert logged_out.status_code == 200
+    wallet = http.get("/api/v1/wallet", headers={"Authorization": "Bearer " + tokens["access_token"]})
+    assert wallet.status_code == 401
+
+
 def test_paystack_webhook_rejects_invalid_signature(client, monkeypatch):
     http, _, _ = client
     monkeypatch.setenv("PAYSTACK_SECRET_KEY", "test-paystack-secret")

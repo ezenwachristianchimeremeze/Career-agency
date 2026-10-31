@@ -318,6 +318,21 @@ def _init_db() -> None:
             hit_count INTEGER NOT NULL DEFAULT 0,
             last_hit_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS ai_quotes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            action_key TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            cache_key TEXT NOT NULL,
+            cache_hit INTEGER NOT NULL,
+            credits_cost INTEGER NOT NULL CHECK(credits_cost >= 0),
+            quote_token_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_quotes_user_created ON ai_quotes(user_id,created_at DESC);
         CREATE TABLE IF NOT EXISTS ai_requests (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id),

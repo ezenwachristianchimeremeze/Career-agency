@@ -170,9 +170,33 @@ def test_paystack_webhook_rejects_invalid_signature(client, monkeypatch):
     assert response.status_code == 401
 
 
+def test_root_is_login_first_and_authenticated_user_gets_workspace(client):
+    http, _, _ = client
+    first = http.get("/", follow_redirects=False)
+    assert first.status_code == 302
+    assert first.headers["Location"].endswith("/auth/login")
+    create_and_login(client)
+    root = http.get("/", follow_redirects=False)
+    assert root.status_code == 302
+    assert root.headers["Location"].endswith("/workspace")
+    workspace = http.get("/workspace")
+    assert workspace.status_code == 200
+    assert b"Welcome, Test Candidate" in workspace.data
+
+
+def test_csrf_is_required_for_browser_mutations(client):
+    http, _, _ = client
+    response = http.post("/api/v1/auth/login", json={
+        "email": "nobody@example.com",
+        "password": "not-a-real-password",
+    })
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "CSRF_VALIDATION_FAILED"
+
+
 def test_auth_screens_render_and_login_is_dark(client):
     http, _, _ = client
-    for path in ["/auth/login", "/register", "/forgot-password", "/reset-password", "/verify-email"]:
+    for path in ["/auth/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy"]:
         response = http.get(path)
         assert response.status_code == 200
         assert b"CAREER AGENCY" in response.data

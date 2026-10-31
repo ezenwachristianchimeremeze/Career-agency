@@ -362,6 +362,36 @@ def _paystack_request(path: str, payload=None):
         raise RuntimeError("Paystack request failed") from exc
 
 
+def _issue_auth_token(user_id: str, purpose: str, ttl_seconds: int) -> str:
+    raw = secrets.token_urlsafe(40)
+    expires = datetime.fromtimestamp(time.time() + ttl_seconds, timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute("UPDATE auth_tokens SET consumed_at=? WHERE user_id=? AND purpose=? AND consumed_at IS NULL",
+                   (utc_now(), user_id, purpose))
+        db.execute("INSERT INTO auth_tokens(id,user_id,token_hash,purpose,expires_at,created_at) VALUES(?,?,?,?,?,?)",
+                   (str(uuid.uuid4()), user_id, hashlib.sha256(raw.encode()).hexdigest(), purpose, expires, utc_now()))
+    return raw
+
+
+def _send_auth_email(email: str, subject: str, text_body: str) -> None:
+    endpoint = os.environ.get("CAREER_AGENCY_AUTH_EMAIL_ENDPOINT", "")
+    api_key = os.environ.get("CAREER_AGENCY_AUTH_EMAIL_API_KEY", "")
+    if not endpoint:
+        raise RuntimeError("Authentication email provider is not configured")
+    payload = json.dumps({"to": email, "subject": subject, "text": text_body}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    req = Request(endpoint, data=payload, headers=headers, method="POST")
+    with urlopen(req, timeout=20) as response:
+        if response.status < 200 or response.status >= 300:
+            raise RuntimeError("Authentication email delivery failed")
+
+
+def _auth_email_link(path: str, token: str) -> str:
+    base = os.environ.get("CAREER_AGENCY_PUBLIC_URL", "http://127.0.0.1:5000").rstrip("/")
+    return base + path + "?token=" + token
+
 def register_core_api(app):
     """Register core routes and auth-first guard on the existing Flask app."""
     app.secret_key = os.environ.get("CAREER_AGENCY_SECRET_KEY", app.secret_key or secrets.token_hex(32))

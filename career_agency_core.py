@@ -796,6 +796,8 @@ def register_core_api(app):
             or request.path.startswith("/api/v1/jobs/")
             or request.path == "/api/v1/applications"
             or request.path.startswith("/api/v1/applications/")
+            or request.path == "/api/v1/interviews"
+            or request.path.startswith("/api/v1/interviews/")
             or request.path.startswith("/api/v1/recruiter/pipeline")
             or request.path == "/api/v1/ai/quote"
             or request.path.startswith("/api/v1/ai/actions/")

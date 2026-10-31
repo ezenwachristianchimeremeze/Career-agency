@@ -34,6 +34,11 @@ def put_json(http, path, payload):
     csrf = http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
     return http.put(path, json=payload, headers={"X-CSRF-Token": csrf})
 
+
+def patch_json(http, path, payload):
+    csrf = http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
+    return http.patch(path, json=payload, headers={"X-CSRF-Token": csrf})
+
 def create_and_login(client):
     http, db_path, app = client
     created = post_json(http, "/api/v1/auth/register", {
@@ -161,6 +166,27 @@ def test_password_reset_invalidates_existing_sessions(client):
     assert reset.status_code == 200
     response = http.get("/api/v1/wallet")
     assert response.status_code == 401
+
+
+def test_profile_get_and_patch_are_user_scoped(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria", "city": "Port Harcourt"})
+    before = http.get("/api/v1/profile")
+    assert before.status_code == 200
+    assert before.get_json()["data"]["email"] == "candidate@example.com"
+    updated = patch_json(http, "/api/v1/profile", {
+        "full_name": "Updated Candidate",
+        "country": "Nigeria",
+        "city": "Lagos",
+        "headline": "Product Designer",
+        "professional_summary": "Designs accessible digital products.",
+        "years_experience": 3,
+    })
+    assert updated.status_code == 200
+    after = http.get("/api/v1/profile").get_json()["data"]
+    assert after["full_name"] == "Updated Candidate"
+    assert after["city"] == "Lagos"
+    assert after["headline"] == "Product Designer"
 
 
 def test_role_dashboard_metrics_and_workspace_navigation(client):

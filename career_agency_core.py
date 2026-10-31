@@ -482,31 +482,19 @@ def register_core_api(app):
 
     @app.get("/auth/login")
     def core_login_screen():
-        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · Career Agency</title><style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 20% 0%,#17264a 0,#0a1020 42%,#050812 100%);color:#f8fafc;font-family:Inter,system-ui,sans-serif;display:grid;place-items:center;padding:24px}
-.panel{width:min(100%,430px);padding:34px;border:1px solid #263451;border-radius:22px;background:rgba(13,22,42,.94);box-shadow:0 24px 80px #0008}
-.brand{font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:#93c5fd;font-weight:800}.mark{width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,#60a5fa,#2563eb);display:grid;place-items:center;font-weight:900;color:#071329;margin-bottom:22px}
-h1{font-size:28px;margin:10px 0 8px}p{color:#9aabc5;line-height:1.55;margin:0 0 24px}label{display:block;font-size:13px;color:#cbd5e1;margin:16px 0 7px}
-input{width:100%;padding:14px 13px;border-radius:11px;border:1px solid #33415c;background:#080f1e;color:white;font-size:15px;outline:none}
-input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px #3b82f633}
-button{width:100%;margin-top:22px;padding:14px;border:0;border-radius:11px;background:#3b82f6;color:white;font-weight:800;font-size:15px;cursor:pointer}
-button:disabled{opacity:.55;cursor:wait}.links{display:flex;justify-content:space-between;gap:12px;margin-top:20px;font-size:13px}
-a{color:#93c5fd;text-decoration:none}.error{min-height:20px;color:#fca5a5;font-size:13px;margin-top:12px}
-</style></head><body><main class="panel"><div class="mark">CA</div><div class="brand">Career Agency</div>
-<h1>Welcome back</h1><p>Sign in to continue to your career workspace.</p>
-<form id="login"><label for="email">Email address</label><input id="email" type="email" autocomplete="username" required>
-<label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
-<button id="submit" type="submit">Sign in</button><div class="error" id="error" role="alert"></div></form>
-<div class="links"><a href="/forgot-password">Forgot password?</a><a href="/register">Create account</a></div></main>
-<script>
-const form=document.getElementById('login'),btn=document.getElementById('submit'),err=document.getElementById('error');
-form.addEventListener('submit',async e=>{e.preventDefault();btn.disabled=true;btn.textContent='Signing in…';err.textContent='';
-try{const t=await fetch('/api/v1/auth/csrf').then(x=>x.json());const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':t.data.csrf_token},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
-const d=await r.json();if(!r.ok)throw new Error(d.error?.message||'Unable to sign in.');
-location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=false;btn.textContent='Sign in';}});
-</script></body></html>"""
+        content = """
+        <form id="login"><label for="email">Email address</label><input id="email" type="email" autocomplete="username" required>
+        <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
+        <button id="submit" type="submit">Sign in</button><div class="error" id="error" role="alert"></div></form>
+        <div class="links"><a href="/forgot-password">Forgot password?</a><a href="/register">Create account</a></div>"""
+        script = """
+        const form=document.getElementById("login"),btn=document.getElementById("submit"),err=document.getElementById("error");
+        form.addEventListener("submit",async ev=>{ev.preventDefault();btn.disabled=true;btn.textContent="Signing in…";err.textContent="";
+        try{const t=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/login",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t.data.csrf_token},body:JSON.stringify({email:document.getElementById("email").value,password:document.getElementById("password").value})});
+        const d=await r.json();if(!r.ok)throw new Error(d.error?.message||"Unable to sign in.");location.href="/";
+        }catch(x){err.textContent=x.message;}finally{btn.disabled=false;btn.textContent="Sign in";}});
+        """
+        return _auth_page("Welcome back.", "Your next opportunity starts with one focused step. Sign in to continue.", content, script)
 
     @app.get("/register")
     def core_register_screen():
@@ -665,12 +653,21 @@ location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=fals
     @app.post("/api/v1/auth/register")
     def core_register():
         data = request.get_json(silent=True) or {}
-        name, email, password = (str(data.get(k, "")).strip() for k in ("full_name", "email", "password"))
+        name = str(data.get("full_name", "")).strip()
+        email = str(data.get("email", "")).strip().lower()
+        password = str(data.get("password", ""))
+        confirm = str(data.get("confirm_password", ""))
         role = str(data.get("role", "job_seeker"))
-        if not name or len(name) > 120 or "@" not in email or len(password) < 10:
-            return _json_error("VALIDATION_ERROR", "Provide a name, valid email and password of at least 10 characters.", 400)
+        if not name or len(name) > 120 or len(email) > 254 or "@" not in email or len(password) < 10:
+            return _json_error("VALIDATION_ERROR", "Provide a valid name and email, and a password of at least 10 characters.", 400)
+        if password != confirm:
+            return _json_error("PASSWORD_MISMATCH", "The passwords do not match.", 400)
+        if data.get("terms_accepted") is not True:
+            return _json_error("CONSENT_REQUIRED", "You must accept the Terms and Privacy Policy to create an account.", 400)
         if role not in {"job_seeker", "employer", "recruiter"}:
             return _json_error("VALIDATION_ERROR", "This account type cannot be registered here.", 400)
+        if not _rate_limit("register:" + hashlib.sha256((request.remote_addr or "unknown").encode()).hexdigest(), 5, 3600):
+            return _json_error("RATE_LIMITED", "Too many registration attempts. Try again later.", 429)
         user_id = str(uuid.uuid4())
         now = utc_now()
         try:
@@ -679,13 +676,22 @@ location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=fals
                     """INSERT INTO users(id,email,password_hash,full_name,role,account_status,
                        email_verified_at,credits,created_at,updated_at)
                        VALUES(?,?,?,?,?,'pending_verification',NULL,0,?,?)""",
-                    (user_id, email.lower(), generate_password_hash(password, method="scrypt"),
-                     name, role, now, now),
+                    (user_id, email, generate_password_hash(password, method="scrypt"), name, role, now, now),
                 )
         except sqlite3.IntegrityError:
             return _json_error("CONFLICT", "An account with these details may already exist.", 409)
+        token = _issue_auth_token(user_id, "email_verification", 86400)
+        delivery = "queued"
+        try:
+            _send_auth_email(email, "Verify your Career Agency account",
+                             "Welcome to Career Agency. Verify your email: " +
+                             _auth_email_link("/verify-email", token))
+        except Exception:
+            delivery = "not_configured"
+            app.logger.exception("Verification email delivery failed")
         _audit(user_id, "account.registered", "user", user_id, "success", {"role": role})
-        return jsonify({"data": {"user_id": user_id, "status": "active"},
+        return jsonify({"data": {"user_id": user_id, "status": "pending_verification",
+                                 "verification_email": delivery},
                         "request_id": str(uuid.uuid4())}), 201
 
     @app.post("/api/v1/auth/login")

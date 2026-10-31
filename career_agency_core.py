@@ -78,6 +78,16 @@ def _init_db() -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mobile_access_tokens (
+            jti TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            family_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mobile_access_family
+            ON mobile_access_tokens(family_id,user_id);
         CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -302,6 +312,16 @@ def _current_user(db=None):
                 )
                 user_id = payload.get("sub")
                 expected_version = payload.get("sv")
+                jti = payload.get("jti")
+                if not jti:
+                    return None
+                with _connect() as token_db:
+                    active_token = token_db.execute(
+                        "SELECT 1 FROM mobile_access_tokens WHERE jti=? AND revoked_at IS NULL AND expires_at>?",
+                        (jti, utc_now()),
+                    ).fetchone()
+                if not active_token:
+                    return None
                 bearer = True
             except (BadSignature, SignatureExpired, TypeError, ValueError):
                 return None
@@ -473,6 +493,28 @@ def _rate_limit(bucket_key: str, limit: int, window_seconds: int) -> bool:
                    (attempts, blocked, bucket_key))
         db.commit()
         return blocked is None
+
+
+def _issue_mobile_access(user, family_id: str) -> str:
+    jti = str(uuid.uuid4())
+    expires = datetime.fromtimestamp(time.time() + 900, timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute("INSERT INTO mobile_access_tokens(jti,user_id,family_id,expires_at,created_at) VALUES(?,?,?,?,?)",
+                   (jti, user["id"], family_id, expires, utc_now()))
+    payload = {"sub": user["id"], "role": user["role"], "sv": int(user["session_version"]),
+               "jti": jti, "family": family_id}
+    return URLSafeTimedSerializer(current_app.secret_key, salt="career-agency-mobile-access").dumps(payload)
+
+
+def _issue_mobile_refresh(user_id: str, family_id: str | None = None):
+    raw = secrets.token_urlsafe(48)
+    row_id = str(uuid.uuid4())
+    family = family_id or str(uuid.uuid4())
+    expires = datetime.fromtimestamp(time.time() + 30 * 86400, timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute("INSERT INTO mobile_refresh_tokens(id,user_id,family_id,token_hash,expires_at,created_at) VALUES(?,?,?,?,?,?)",
+                   (row_id, user_id, family, hashlib.sha256(raw.encode()).hexdigest(), expires, utc_now()))
+    return raw, family, row_id
 
 
 def _issue_auth_token(user_id: str, purpose: str, ttl_seconds: int) -> str:

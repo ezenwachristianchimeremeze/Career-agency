@@ -229,3 +229,14 @@ Admin credit adjustment requires a reason, step-up authentication and audit reco
 | POST | /api/v1/onboarding/complete | Validate required fields and complete setup |
 
 The first authenticated route is /onboarding. Incomplete accounts are redirected there from the workspace. The workspace is accessible only after onboarding completion. Job seekers provide country and career preferences; employers provide organisation details; recruiters provide agency details. Role identity always comes from the server session.
+
+
+## 10. Mobile authentication endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /api/v1/mobile/auth/login | Issue short-lived access token and refresh token |
+| POST | /api/v1/mobile/auth/refresh | Rotate one-time refresh token |
+| POST | /api/v1/mobile/auth/logout | Revoke a mobile token family |
+
+Access tokens expire after 15 minutes; refresh tokens expire after 30 days. Reuse of a consumed refresh token revokes its family. The existing protected APIs accept the signed Bearer access token. Native clients must store refresh tokens in platform-protected storage.

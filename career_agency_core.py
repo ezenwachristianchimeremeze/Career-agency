@@ -895,13 +895,19 @@ def register_core_api(app):
             return redirect("/workspace")
         content = """<div id="applications" style="display:grid;gap:12px"><div class="empty">Loading applications…</div></div>
         <div id="message" class="error" role="status"></div><div class="links"><a href="/workspace">Back to workspace</a><a href="/workspace/jobs">Discover jobs</a></div>"""
-        script = """
+        script = """const role=""" + json.dumps(user["role"]) + """;
         const root=document.getElementById("applications"),message=document.getElementById("message");
-        fetch("/api/v1/applications").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to load applications.");root.innerHTML="";
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        async function load(){try{const r=await fetch("/api/v1/applications");const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to load applications.");root.innerHTML="";
         if(!x.data.length){root.innerHTML='<div class="empty">No applications yet. Your application activity will appear here.</div>';return;}
-        x.data.forEach(a=>{const el=document.createElement("article");el.style.cssText="padding:15px;border:1px solid #263852;border-radius:13px;background:#0d182a";const h=document.createElement("strong");h.textContent=a.title||"Application";const p=document.createElement("p");p.textContent=[a.organisation_name,a.applicant_name,a.status].filter(Boolean).join(" · ");p.style.color="#9aabc3";const d=document.createElement("small");d.textContent=new Date(a.applied_at).toLocaleString();d.style.color="#7186a6";el.append(h,p,d);
-        if(a.status!=="withdrawn"&&a.status!=="rejected"&&a.status!=="offer"&&a.job_id){const link=document.createElement("a");link.href="/workspace/jobs/"+encodeURIComponent(a.job_id);link.textContent="View job";link.style.display="block";link.style.marginTop="9px";el.append(link);}root.append(el);});
-        }).catch(e=>{message.textContent=e.message;root.innerHTML='<div class="empty">Application data is temporarily unavailable.</div>';});
+        x.data.forEach(a=>{const el=document.createElement("article");el.style.cssText="padding:15px;border:1px solid #263852;border-radius:13px;background:#0d182a";
+        const h=document.createElement("strong");h.textContent=a.title||"Application";const p=document.createElement("p");p.textContent=[a.organisation_name,a.applicant_name,a.status].filter(Boolean).join(" · ");p.style.color="#9aabc3";
+        const d=document.createElement("small");d.textContent=new Date(a.applied_at).toLocaleString();d.style.color="#7186a6";el.append(h,p,d);
+        if(role==="job_seeker"&&a.status!=="withdrawn"&&a.status!=="rejected"&&a.status!=="offer"){const b=document.createElement("button");b.textContent="Withdraw application";b.style.cssText="width:auto;margin-top:12px;padding:9px 13px;background:#25354e";b.addEventListener("click",async()=>{const t=await csrf();const r=await fetch("/api/v1/applications/"+encodeURIComponent(a.id)+"/withdraw",{method:"POST",headers:{"X-CSRF-Token":t}});const x=await r.json();message.textContent=r.ok?"Application withdrawn.":(x.error?.message||"Unable to withdraw.");load();});el.append(b);}
+        if(role==="employer"||role==="admin"){const select=document.createElement("select");["reviewing","shortlisted","interview","rejected","offer"].forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v.replace("_"," ");if(v===a.status)o.selected=true;select.append(o);});const b=document.createElement("button");b.textContent="Update status";b.style.cssText="margin-top:10px";b.addEventListener("click",async()=>{const t=await csrf();const r=await fetch("/api/v1/applications/"+encodeURIComponent(a.id)+"/status",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify({status:select.value})});const x=await r.json();message.textContent=r.ok?"Application status updated.":(x.error?.message||"Unable to update status.");load();});el.append(select,b);}
+        if(role==="job_seeker"&&a.job_id){const link=document.createElement("a");link.href="/workspace/jobs/"+encodeURIComponent(a.job_id);link.textContent="View job";link.style.display="block";link.style.marginTop="9px";link.style.color="#93baff";el.append(link);}root.append(el);});
+        }catch(e){message.textContent=e.message;root.innerHTML='<div class="empty">Application data is temporarily unavailable.</div>';}}
+        load();
         """
         return _auth_page("Applications", "Track your submitted applications and their progress.", content, script)
 

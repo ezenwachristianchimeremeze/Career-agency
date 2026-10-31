@@ -454,6 +454,12 @@ def _require_user(fn):
     return wrapped
 
 
+def _create_notification(user_id: str, category: str, title: str, body: str, target_url: str | None = None):
+    with _connect() as db:
+        db.execute("INSERT INTO notifications(id,user_id,category,title,body,target_url,created_at) VALUES(?,?,?,?,?,?,?)",
+                   (str(uuid.uuid4()), user_id, category, title[:160], body[:1000], target_url, utc_now()))
+
+
 def _audit(actor_id, action, resource_type, resource_id, outcome, metadata=None):
     with _connect() as db:
         db.execute(
@@ -720,7 +726,8 @@ def register_core_api(app):
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
                              "/onboarding", "/profile", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
-                             "/api/v1/dashboard", "/api/v1/saved-jobs"}
+                             "/api/v1/dashboard", "/api/v1/saved-jobs", "/notifications", "/api/v1/notifications"}
+            or request.path.startswith("/api/v1/notifications/")
             or request.path == "/api/v1/cvs"
             or request.path.startswith("/api/v1/cvs/")
             or request.path == "/api/v1/cvs"
@@ -1145,6 +1152,53 @@ def register_core_api(app):
         button.addEventListener("click",check);check();
         """
         return _auth_page("Payment status", "Your payment is being checked securely.", content, script)
+
+    @app.get("/notifications")
+    @_require_user
+    def core_notifications_screen():
+        content = """<div id="notifications" style="display:grid;gap:10px"><div class="empty">Loading notifications…</div></div>
+        <div id="message" class="error" role="status"></div><div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const root=document.getElementById("notifications"),msg=document.getElementById("message");
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        async function load(){const r=await fetch("/api/v1/notifications");const x=await r.json();root.innerHTML="";if(!r.ok){msg.textContent=x.error?.message||"Unable to load notifications.";return;}
+        if(!x.data.length){root.innerHTML='<div class="empty">You are all caught up. New updates will appear here.</div>';return;}
+        x.data.forEach(n=>{const el=document.createElement("article");el.style.cssText="padding:14px;border:1px solid #263852;border-radius:13px;background:#0d182a";const h=document.createElement("strong");h.textContent=n.title;const p=document.createElement("p");p.textContent=n.body;p.style.color="#9aabc3";const d=document.createElement("small");d.textContent=new Date(n.created_at).toLocaleString();d.style.color="#7186a6";el.append(h,p,d);
+        if(!n.read_at){const b=document.createElement("button");b.textContent="Mark as read";b.style.cssText="width:auto;margin-top:10px;padding:9px 13px";b.addEventListener("click",async()=>{const t=await csrf();const r=await fetch("/api/v1/notifications/"+encodeURIComponent(n.id)+"/read",{method:"POST",headers:{"X-CSRF-Token":t}});if(r.ok)load();else msg.textContent="Could not update notification.";});el.append(b);}if(n.target_url){const a=document.createElement("a");a.href=n.target_url;a.textContent="Open";a.style.display="block";a.style.marginTop="9px";el.append(a);}root.append(el);});}
+        load();
+        """
+        return _auth_page("Notifications", "Important updates about your career activity and account.", content, script)
+
+    @app.get("/api/v1/notifications")
+    @_require_user
+    def core_notifications_list():
+        user = _current_user()
+        limit = min(max(request.args.get("limit", default=50, type=int), 1), 100)
+        with _connect() as db:
+            rows = db.execute("SELECT id,category,title,body,target_url,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+                              (user["id"], limit)).fetchall()
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/notifications/<notification_id>/read")
+    @_require_user
+    def core_notification_read(notification_id):
+        user = _current_user()
+        with _connect() as db:
+            cur = db.execute("UPDATE notifications SET read_at=? WHERE id=? AND user_id=? AND read_at IS NULL",
+                             (utc_now(), notification_id, user["id"]))
+            if cur.rowcount == 0 and not db.execute("SELECT 1 FROM notifications WHERE id=? AND user_id=?",
+                                                    (notification_id, user["id"])).fetchone():
+                return _json_error("NOT_FOUND", "Notification not found.", 404)
+        return jsonify({"data": {"read": True}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/notifications/read-all")
+    @_require_user
+    def core_notifications_read_all():
+        user = _current_user()
+        with _connect() as db:
+            cur = db.execute("UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL",
+                             (utc_now(), user["id"]))
+        return jsonify({"data": {"updated": cur.rowcount}, "request_id": str(uuid.uuid4())})
 
     @app.get("/profile")
     @_require_user

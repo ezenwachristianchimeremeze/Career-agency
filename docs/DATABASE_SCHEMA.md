@@ -181,3 +181,17 @@ For long-running AI tasks, create a request record and reserve/debit according t
 - Validate unique indexes, foreign keys, wallet ledger reconciliation and cache isolation.
 - Package catalogue stays disabled until all intermediate tiers and display copy are approved.
 - Run migration tests against a copy of the real database before production.
+
+
+## 9. Implemented onboarding/profile tables
+
+The core backend now creates these additional tables:
+- user_profiles: one-to-one contact and professional profile data (phone, country, city, headline, summary, experience).
+- career_preferences: desired roles, work modes, employment types and preferred locations stored as validated JSON arrays.
+- organizations: employer-owned organisation records with verification status defaulting to unverified.
+- employer_profiles: one-to-one employer account profile linked to an organisation.
+- recruiter_profiles: one-to-one recruiter agency profile and focus area.
+- onboarding_progress: per-user completed onboarding steps.
+- users.onboarding_completed_at: records when initial setup is complete.
+
+All records are linked to the authenticated user through foreign keys. Employer organisation creation is scoped to the owner. Public onboarding never grants admin role.

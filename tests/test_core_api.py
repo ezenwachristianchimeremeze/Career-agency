@@ -200,6 +200,19 @@ def test_password_reset_invalidates_existing_sessions(client):
     assert response.status_code == 401
 
 
+def test_ai_assistant_displays_global_credit_confirmation_modal(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    page = http.get("/ai-assistant")
+    assert page.status_code == 200
+    assert b"USING CREDITS" in page.data
+    assert b"DEBITING CREDITS" in page.data
+    assert b"Remaining credits" in page.data
+    assert b"Cancel" in page.data
+    assert b"Confirm" in page.data
+
+
 def test_wallet_screen_shows_balance_and_inactive_package_state(client):
     http, _, _ = create_and_login(client)
     put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})

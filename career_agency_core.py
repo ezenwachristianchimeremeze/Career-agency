@@ -549,8 +549,9 @@ def register_core_api(app):
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
-                             "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages"}
+                             "/onboarding", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages"}
             or request.path.startswith("/api/v1/auth/")
+            or request.path.startswith("/api/v1/onboarding/")
             or request.path.startswith("/api/v1/ai/actions/")
             or request.path.startswith("/api/v1/payments/")
             or request.path.startswith("/api/v1/admin/credit-packages/")
@@ -600,10 +601,161 @@ def register_core_api(app):
         """
         return _auth_page("Welcome back.", "Your next opportunity starts with one focused step. Sign in to continue.", content, script)
 
+    @app.get("/onboarding")
+    @_require_user
+    def core_onboarding_screen():
+        user = _current_user()
+        if user["onboarding_completed_at"]:
+            return redirect("/workspace")
+        role = user["role"]
+        role_field = ""
+        if role == "employer":
+            role_field = '<label>Organisation name</label><input name="organization_name" maxlength="160" required>'
+            role_field += '<label>Organisation website</label><input name="website" type="url" placeholder="https://example.com">'
+            role_field += '<label>Your job title</label><input name="job_title" maxlength="120">'
+        elif role == "recruiter":
+            role_field = '<label>Recruitment agency name</label><input name="agency_name" maxlength="160" required>'
+            role_field += '<label>Recruitment focus</label><input name="client_focus" maxlength="240" placeholder="e.g. Technology, Finance">'
+        else:
+            role_field = '<label>Professional headline</label><input name="headline" maxlength="160" placeholder="e.g. Graduate software developer">'
+            role_field += '<label>Years of experience</label><input name="years_experience" type="number" min="0" max="60" value="0">'
+            role_field += '<label>Career interests</label><input name="desired_roles" placeholder="Separate roles with commas">'
+            role_field += '<label>Preferred work arrangement</label><select name="work_modes"><option value="Remote">Remote</option><option value="Hybrid">Hybrid</option><option value="On-site">On-site</option><option value="Remote,Hybrid">Remote or hybrid</option><option value="Remote,Hybrid,On-site">Any arrangement</option></select>'
+        content = """
+        <form id="onboarding-form">
+        <label>Country</label><input name="country" value="Nigeria" autocomplete="country-name" required>
+        <label>City or state</label><input name="city" autocomplete="address-level1" maxlength="100" placeholder="e.g. Port Harcourt">
+        <label>Phone number (optional)</label><input name="phone" type="tel" autocomplete="tel" maxlength="30">
+        """ + role_field + """
+        <button id="submit" type="submit">Save and continue</button>
+        <div id="error" class="error" role="alert"></div></form>"""
+        script = """
+        const f=document.getElementById("onboarding-form"),b=document.getElementById("submit"),e=document.getElementById("error");
+        f.addEventListener("submit",async ev=>{ev.preventDefault();const d=Object.fromEntries(new FormData(f));b.disabled=true;b.textContent="Saving your profile…";e.textContent="";
+        const csv=v=>(v||"").split(",").map(x=>x.trim()).filter(Boolean);
+        const profile={country:d.country,city:d.city,phone:d.phone,headline:d.headline||"",years_experience:Number(d.years_experience||0),organization_name:d.organization_name||"",website:d.website||"",job_title:d.job_title||"",agency_name:d.agency_name||"",client_focus:d.client_focus||""};
+        const prefs={desired_roles:csv(d.desired_roles),work_modes:csv(d.work_modes),employment_types:[],preferred_locations:[]};
+        try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json()),h={"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token};
+        let r=await fetch("/api/v1/onboarding/profile",{method:"PUT",headers:h,body:JSON.stringify(profile)});let x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save profile.");
+        r=await fetch("/api/v1/onboarding/preferences",{method:"PUT",headers:h,body:JSON.stringify(prefs)});x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save preferences.");
+        r=await fetch("/api/v1/onboarding/complete",{method:"POST",headers:h,body:"{}"});x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Please complete the required details.");
+        location.href="/workspace";
+        }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Save and continue";}});
+        """
+        return _auth_page("Let's set up your workspace", "A few details help Career Agency prepare the right tools for your account.", content, script)
+
+    @app.get("/api/v1/onboarding")
+    @_require_user
+    def core_onboarding_status():
+        user = _current_user()
+        with _connect() as db:
+            profile = db.execute("SELECT * FROM user_profiles WHERE user_id=?", (user["id"],)).fetchone()
+            preferences = db.execute("SELECT * FROM career_preferences WHERE user_id=?", (user["id"],)).fetchone()
+        return jsonify({"data": {"role": user["role"], "completed": bool(user["onboarding_completed_at"]),
+                                 "profile": dict(profile) if profile else None,
+                                 "preferences": dict(preferences) if preferences else None},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.put("/api/v1/onboarding/profile")
+    @_require_user
+    def core_onboarding_profile():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        country = str(data.get("country", "")).strip()
+        if not country or len(country) > 100:
+            return _json_error("VALIDATION_ERROR", "Country is required.", 400)
+        phone = str(data.get("phone", "")).strip()[:30] or None
+        city = str(data.get("city", "")).strip()[:100] or None
+        headline = str(data.get("headline", "")).strip()[:160] or None
+        summary = str(data.get("professional_summary", "")).strip()[:3000] or None
+        try:
+            years = int(data.get("years_experience", 0) or 0)
+        except (TypeError, ValueError):
+            return _json_error("VALIDATION_ERROR", "Years of experience must be a whole number.", 400)
+        if years < 0 or years > 60:
+            return _json_error("VALIDATION_ERROR", "Years of experience must be between 0 and 60.", 400)
+        now = utc_now()
+        with _connect() as db:
+            db.execute("""INSERT INTO user_profiles(user_id,phone,country,city,headline,professional_summary,years_experience,created_at,updated_at)
+                          VALUES(?,?,?,?,?,?,?,?,?)
+                          ON CONFLICT(user_id) DO UPDATE SET phone=excluded.phone,country=excluded.country,
+                          city=excluded.city,headline=excluded.headline,professional_summary=excluded.professional_summary,
+                          years_experience=excluded.years_experience,updated_at=excluded.updated_at""",
+                       (user["id"], phone, country, city, headline, summary, years, now, now))
+            if user["role"] == "employer":
+                org_name = str(data.get("organization_name", "")).strip()
+                if not org_name or len(org_name) > 160:
+                    return _json_error("VALIDATION_ERROR", "Organisation name is required.", 400)
+                org_id = str(uuid.uuid4())
+                db.execute("INSERT INTO organizations(id,owner_user_id,name,website,country,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                           (org_id, user["id"], org_name, str(data.get("website", "")).strip()[:240] or None, country, now, now))
+                db.execute("INSERT INTO employer_profiles(user_id,organization_id,job_title,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET organization_id=excluded.organization_id,job_title=excluded.job_title,updated_at=excluded.updated_at",
+                           (user["id"], org_id, str(data.get("job_title", "")).strip()[:120] or None, now, now))
+            elif user["role"] == "recruiter":
+                agency = str(data.get("agency_name", "")).strip()
+                if not agency or len(agency) > 160:
+                    return _json_error("VALIDATION_ERROR", "Recruitment agency name is required.", 400)
+                db.execute("INSERT INTO recruiter_profiles(user_id,agency_name,client_focus,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET agency_name=excluded.agency_name,client_focus=excluded.client_focus,updated_at=excluded.updated_at",
+                           (user["id"], agency, str(data.get("client_focus", "")).strip()[:240] or None, now, now))
+        return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})
+
+    @app.put("/api/v1/onboarding/preferences")
+    @_require_user
+    def core_onboarding_preferences():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        def clean_list(key, max_items=20):
+            value = data.get(key, [])
+            if not isinstance(value, list) or len(value) > max_items:
+                raise ValueError(key)
+            result = []
+            for item in value:
+                if not isinstance(item, str) or len(item.strip()) > 120:
+                    raise ValueError(key)
+                clean = item.strip()
+                if clean:
+                    result.append(clean)
+            return list(dict.fromkeys(result))
+        try:
+            desired = clean_list("desired_roles")
+            modes = clean_list("work_modes", 5)
+            employment = clean_list("employment_types", 10)
+            locations = clean_list("preferred_locations")
+        except ValueError:
+            return _json_error("VALIDATION_ERROR", "One or more preference lists are invalid.", 400)
+        now = utc_now()
+        with _connect() as db:
+            db.execute("""INSERT INTO career_preferences(user_id,desired_roles_json,work_modes_json,employment_types_json,preferred_locations_json,updated_at)
+                          VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET desired_roles_json=excluded.desired_roles_json,
+                          work_modes_json=excluded.work_modes_json,employment_types_json=excluded.employment_types_json,
+                          preferred_locations_json=excluded.preferred_locations_json,updated_at=excluded.updated_at""",
+                       (user["id"], json.dumps(desired), json.dumps(modes), json.dumps(employment), json.dumps(locations), now))
+        return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/onboarding/complete")
+    @_require_user
+    def core_onboarding_complete():
+        user = _current_user()
+        with _connect() as db:
+            profile = db.execute("SELECT country FROM user_profiles WHERE user_id=?", (user["id"],)).fetchone()
+            if not profile or not profile["country"]:
+                return _json_error("ONBOARDING_INCOMPLETE", "Add your country before continuing.", 400)
+            if user["role"] == "employer" and not db.execute("SELECT 1 FROM employer_profiles WHERE user_id=?", (user["id"],)).fetchone():
+                return _json_error("ONBOARDING_INCOMPLETE", "Add your organisation details before continuing.", 400)
+            if user["role"] == "recruiter" and not db.execute("SELECT 1 FROM recruiter_profiles WHERE user_id=?", (user["id"],)).fetchone():
+                return _json_error("ONBOARDING_INCOMPLETE", "Add your agency details before continuing.", 400)
+            now = utc_now()
+            db.execute("UPDATE users SET onboarding_completed_at=?,updated_at=? WHERE id=?", (now, now, user["id"]))
+            db.execute("INSERT OR REPLACE INTO onboarding_progress(user_id,step_key,completed_at) VALUES(?,?,?)",
+                       (user["id"], "profile_setup", now))
+        return jsonify({"data": {"completed": True, "next": "/workspace"}, "request_id": str(uuid.uuid4())})
+
     @app.get("/workspace")
     @_require_user
     def core_workspace_home():
         user = _current_user()
+        if not user["onboarding_completed_at"]:
+            return redirect("/onboarding")
         role_names = {"job_seeker": "Job Seeker", "employer": "Employer", "recruiter": "Recruiter", "admin": "Administrator"}
         role = role_names.get(user["role"], "Career Agency")
         safe_name = user["full_name"]

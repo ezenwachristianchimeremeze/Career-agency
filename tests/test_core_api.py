@@ -29,6 +29,11 @@ def post_json(http, path, payload, headers=None):
         merged.update(headers)
     return http.post(path, json=payload, headers=merged)
 
+
+def put_json(http, path, payload):
+    csrf = http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
+    return http.put(path, json=payload, headers={"X-CSRF-Token": csrf})
+
 def create_and_login(client):
     http, db_path, app = client
     created = post_json(http, "/api/v1/auth/register", {
@@ -170,7 +175,7 @@ def test_paystack_webhook_rejects_invalid_signature(client, monkeypatch):
     assert response.status_code == 401
 
 
-def test_root_is_login_first_and_authenticated_user_gets_workspace(client):
+def test_root_is_login_first_then_onboarding_then_workspace(client):
     http, _, _ = client
     first = http.get("/", follow_redirects=False)
     assert first.status_code == 302
@@ -178,10 +183,25 @@ def test_root_is_login_first_and_authenticated_user_gets_workspace(client):
     create_and_login(client)
     root = http.get("/", follow_redirects=False)
     assert root.status_code == 302
+    assert root.headers["Location"].endswith("/onboarding")
+    assert http.get("/onboarding").status_code == 200
+    assert put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria", "city": "Port Harcourt"}).status_code == 200
+    assert put_json(http, "/api/v1/onboarding/preferences", {"desired_roles": ["Software Developer"], "work_modes": ["Remote"]}).status_code == 200
+    complete = post_json(http, "/api/v1/onboarding/complete", {})
+    assert complete.status_code == 200
+    root = http.get("/", follow_redirects=False)
+    assert root.status_code == 302
     assert root.headers["Location"].endswith("/workspace")
     workspace = http.get("/workspace")
     assert workspace.status_code == 200
     assert b"Welcome, Test Candidate" in workspace.data
+
+
+def test_onboarding_requires_country_before_completion(client):
+    http, _, _ = create_and_login(client)
+    response = post_json(http, "/api/v1/onboarding/complete", {})
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "ONBOARDING_INCOMPLETE"
 
 
 def test_csrf_is_required_for_browser_mutations(client):

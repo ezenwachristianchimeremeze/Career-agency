@@ -66,7 +66,7 @@ def test_registration_login_and_wallet_balance(client):
 
 def test_unverified_user_cannot_login(client):
     http, _, _ = client
-    http.post("/api/v1/auth/register", json={
+    post_json(http, "/api/v1/auth/register", {
         "full_name": "Pending Candidate",
         "email": "pending@example.com",
         "password": "long-test-password-123",
@@ -74,7 +74,7 @@ def test_unverified_user_cannot_login(client):
         "role": "job_seeker",
         "terms_accepted": True,
     })
-    response = http.post("/api/v1/auth/login", json={
+    response = post_json(http, "/api/v1/auth/login", {
         "email": "pending@example.com",
         "password": "long-test-password-123",
     })

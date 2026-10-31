@@ -327,6 +327,18 @@ def test_notifications_are_scoped_and_can_be_marked_read(client):
     assert http.get("/api/v1/notifications").get_json()["data"][0]["read_at"] is not None
 
 
+def test_interview_prep_screen_requires_job_seeker_and_uses_quote_confirmation(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    page = http.get("/workspace/interview-prep")
+    assert page.status_code == 200
+    assert b"Interview Preparation" in page.data
+    assert b"USING CREDITS" in page.data
+    assert b"Confirm" in page.data
+    assert b"mock_interview" in page.data
+
+
 def test_cover_letter_library_create_read_update_and_delete(client):
     http, _, _ = create_and_login(client)
     created = post_json(http, "/api/v1/cover-letters", {

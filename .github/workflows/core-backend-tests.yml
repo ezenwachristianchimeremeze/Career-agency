@@ -17,8 +17,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip
-        python -m pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
       - name: Compile backend modules
         run: python -m py_compile app.py career_agency_core.py
       - name: Run core backend tests

@@ -1779,6 +1779,8 @@ def register_core_api(app):
             return _json_error("UNKNOWN_ACTION", "This AI action is not supported.", 404)
         if not isinstance(input_payload, dict):
             return _json_error("VALIDATION_ERROR", "The input field must be an object.", 400)
+        if not _rate_limit("ai-quote:" + user["id"], 30, 60):
+            return _json_error("RATE_LIMITED", "Too many AI quote requests. Wait a moment and try again.", 429)
         model = "server-default"
         prompt_version = "v1"
         key = _cache_key(action_key, user["id"], input_payload, model, prompt_version)

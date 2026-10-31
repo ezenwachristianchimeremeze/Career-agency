@@ -193,3 +193,8 @@ The UI must not determine access from a locally stored role string.
 - Job seeker, employer and recruiter onboarding fields are role-aware.
 - Legal pages are marked as drafts and must be reviewed before public launch.
 - The native mobile client still needs its own token/refresh lifecycle and UI implementation; the current screens are responsive web experiences.
+
+
+## 10. Native mobile session contract
+
+The backend now supports mobile login, rotating refresh tokens, logout and Bearer access on protected APIs. Native clients must use Android Keystore-backed storage or iOS Keychain; never store refresh tokens in plain preferences or logs. The mobile UI, deep-link verification, push notifications, signed release builds and device testing remain separate delivery work.

@@ -729,6 +729,7 @@ def register_core_api(app):
             or request.path.startswith("/api/v1/ai/actions/")
             or request.path.startswith("/api/v1/payments/")
             or request.path.startswith("/api/v1/admin/credit-packages/")
+            or request.path.startswith("/api/v1/admin/organizations/")
             or request.path.startswith("/health")
         )
         if allowed:
@@ -2143,6 +2144,26 @@ def register_core_api(app):
                            ("refunded", "AI_PROVIDER_ERROR", utc_now(), request_id))
             return _json_error("AI_PROVIDER_ERROR",
                 "The AI service is temporarily unavailable. Your credits have been refunded.", 502)
+
+    @app.post("/api/v1/admin/organizations/<organization_id>/verification")
+    @_require_user
+    def core_organization_verification(organization_id):
+        user = _current_user()
+        if user["role"] != "admin":
+            return _json_error("FORBIDDEN", "Administrator permission is required.", 403)
+        data = request.get_json(silent=True) or {}
+        status = str(data.get("status", ""))
+        reason = str(data.get("reason", "")).strip()
+        if status not in {"verified", "rejected", "pending"} or len(reason) < 8:
+            return _json_error("VALIDATION_ERROR", "Choose a valid verification status and provide an audit reason.", 400)
+        with _connect() as db:
+            cur = db.execute("UPDATE organizations SET verification_status=?,updated_at=? WHERE id=?",
+                             (status, utc_now(), organization_id))
+            if cur.rowcount != 1:
+                return _json_error("NOT_FOUND", "Organisation not found.", 404)
+        _audit(user["id"], "organisation.verification_updated", "organisation", organization_id, "success",
+               {"status": status, "reason": reason})
+        return jsonify({"data": {"updated": True, "status": status}, "request_id": str(uuid.uuid4())})
 
     @app.post("/api/v1/admin/credit-packages/<package_id>/activate")
     @_require_user

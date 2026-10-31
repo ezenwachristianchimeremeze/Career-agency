@@ -195,6 +195,7 @@ def _init_db() -> None:
             candidate_email TEXT,
             role_title TEXT,
             pipeline_stage TEXT NOT NULL DEFAULT 'sourced',
+            candidate_consent_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -371,6 +372,9 @@ def _init_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT")
         if "session_version" not in user_columns:
             db.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1")
+        pipeline_columns = {row["name"] for row in db.execute("PRAGMA table_info(recruiter_pipeline_items)").fetchall()}
+        if "candidate_consent_at" not in pipeline_columns:
+            db.execute("ALTER TABLE recruiter_pipeline_items ADD COLUMN candidate_consent_at TEXT")
         for package in CONFIRMED_PACKAGE_ENDPOINTS:
             db.execute(
                 """INSERT OR IGNORE INTO credit_packages
@@ -726,6 +730,7 @@ def register_core_api(app):
             or request.path.startswith("/workspace/applications")
             or request.path.startswith("/workspace/employer/jobs")
             or request.path.startswith("/workspace/cv-studio")
+            or request.path.startswith("/workspace/recruiter/pipeline")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")
@@ -733,6 +738,7 @@ def register_core_api(app):
             or request.path.startswith("/api/v1/jobs/")
             or request.path == "/api/v1/applications"
             or request.path.startswith("/api/v1/applications/")
+            or request.path.startswith("/api/v1/recruiter/pipeline")
             or request.path == "/api/v1/ai/quote"
             or request.path.startswith("/api/v1/ai/actions/")
             or request.path.startswith("/api/v1/payments/")
@@ -874,6 +880,82 @@ def register_core_api(app):
         form.addEventListener("submit",async e=>{e.preventDefault();const b=document.getElementById("submit");b.disabled=true;const token=await csrf();try{const r=await fetch("/api/v1/jobs/"+encodeURIComponent(id)+"/apply",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({cover_letter:form.elements.cover_letter.value})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Application failed.");msg.textContent="Your application has been submitted.";form.style.display="none";}catch(x){msg.textContent=x.message;}finally{b.disabled=false;}});
         """
         return _auth_page("Job details", "Review the role carefully before submitting an application.", content, script)
+
+    @app.get("/workspace/recruiter/pipeline")
+    @_require_user
+    def core_recruiter_pipeline_screen():
+        user = _current_user()
+        if user["role"] != "recruiter":
+            return redirect("/workspace")
+        content = """
+        <form id="candidate-form"><h3>Add a candidate</h3><label>Candidate name</label><input name="candidate_name" maxlength="160" required>
+        <label>Candidate email (optional)</label><input name="candidate_email" type="email" maxlength="254">
+        <label>Target role</label><input name="role_title" maxlength="160" required>
+        <label class="consent"><input type="checkbox" name="candidate_consent" required><span>I confirm that I have the candidate's permission or another lawful basis to store and manage these details.</span></label>
+        <button id="add" type="submit">Add to pipeline</button></form>
+        <div id="message" class="error" role="status"></div><h3 style="margin-top:25px">Candidate pipeline</h3>
+        <div id="pipeline" style="display:grid;gap:11px"><div class="empty">Loading pipeline…</div></div>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const form=document.getElementById("candidate-form"),root=document.getElementById("pipeline"),message=document.getElementById("message");
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        async function load(){const r=await fetch("/api/v1/recruiter/pipeline");const x=await r.json();root.innerHTML="";if(!r.ok){root.textContent=x.error?.message||"Unable to load pipeline.";return;}if(!x.data.length){root.innerHTML='<div class="empty">Your candidate pipeline is empty.</div>';return;}
+        x.data.forEach(c=>{const el=document.createElement("article");el.style.cssText="padding:14px;border:1px solid #263852;border-radius:13px;background:#0d182a";const h=document.createElement("strong");h.textContent=c.candidate_name;const p=document.createElement("p");p.textContent=[c.role_title,c.candidate_email,c.pipeline_stage].filter(Boolean).join(" · ");p.style.color="#9aabc3";
+        const select=document.createElement("select");["sourced","contacted","screening","shortlisted","interview","offer","hired","rejected"].forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;if(v===c.pipeline_stage)o.selected=true;select.append(o);});
+        const b=document.createElement("button");b.textContent="Update stage";b.style.marginTop="10px";b.addEventListener("click",async()=>{const t=await csrf();const r=await fetch("/api/v1/recruiter/pipeline/"+encodeURIComponent(c.id),{method:"PATCH",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify({pipeline_stage:select.value})});const x=await r.json();message.textContent=r.ok?"Candidate stage updated.":(x.error?.message||"Could not update stage.");load();});el.append(h,p,select,b);root.append(el);});}
+        form.addEventListener("submit",async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.candidate_consent=form.elements.candidate_consent.checked;const b=document.getElementById("add");b.disabled=true;try{const t=await csrf();const r=await fetch("/api/v1/recruiter/pipeline",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not add candidate.");message.textContent="Candidate added to your pipeline.";form.reset();load();}catch(x){message.textContent=x.message;}finally{b.disabled=false;}});load();
+        """
+        return _auth_page("Recruitment pipeline", "Manage candidate progress while respecting candidate privacy and consent.", content, script)
+
+    @app.get("/api/v1/recruiter/pipeline")
+    @_require_user
+    def core_recruiter_pipeline_list():
+        user = _current_user()
+        if user["role"] != "recruiter":
+            return _json_error("FORBIDDEN", "Recruiter permission is required.", 403)
+        with _connect() as db:
+            rows = db.execute("SELECT id,candidate_name,candidate_email,role_title,pipeline_stage,created_at,updated_at FROM recruiter_pipeline_items WHERE recruiter_user_id=? ORDER BY updated_at DESC",
+                              (user["id"],)).fetchall()
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/recruiter/pipeline")
+    @_require_user
+    def core_recruiter_pipeline_add():
+        user = _current_user()
+        if user["role"] != "recruiter":
+            return _json_error("FORBIDDEN", "Recruiter permission is required.", 403)
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("candidate_name", "")).strip()
+        email = str(data.get("candidate_email", "")).strip().lower()
+        title = str(data.get("role_title", "")).strip()
+        if not name or len(name) > 160 or not title or len(title) > 160 or len(email) > 254:
+            return _json_error("VALIDATION_ERROR", "Provide a valid candidate name and target role.", 400)
+        if data.get("candidate_consent") is not True:
+            return _json_error("CANDIDATE_CONSENT_REQUIRED", "Confirm candidate permission or another lawful basis before storing candidate information.", 400)
+        item_id, now = str(uuid.uuid4()), utc_now()
+        with _connect() as db:
+            db.execute("INSERT INTO recruiter_pipeline_items(id,recruiter_user_id,candidate_name,candidate_email,role_title,pipeline_stage,candidate_consent_at,created_at,updated_at) VALUES(?,?,?,?,?,'sourced',?,?,?)",
+                       (item_id, user["id"], name, email or None, title, now, now, now))
+        _audit(user["id"], "recruiter.candidate_added", "pipeline_item", item_id, "success")
+        return jsonify({"data": {"id": item_id, "pipeline_stage": "sourced"}, "request_id": str(uuid.uuid4())}), 201
+
+    @app.patch("/api/v1/recruiter/pipeline/<item_id>")
+    @_require_user
+    def core_recruiter_pipeline_update(item_id):
+        user = _current_user()
+        if user["role"] != "recruiter":
+            return _json_error("FORBIDDEN", "Recruiter permission is required.", 403)
+        data = request.get_json(silent=True) or {}
+        stage = str(data.get("pipeline_stage", ""))
+        if stage not in {"sourced", "contacted", "screening", "shortlisted", "interview", "offer", "hired", "rejected"}:
+            return _json_error("VALIDATION_ERROR", "Choose a valid pipeline stage.", 400)
+        with _connect() as db:
+            cur = db.execute("UPDATE recruiter_pipeline_items SET pipeline_stage=?,updated_at=? WHERE id=? AND recruiter_user_id=?",
+                             (stage, utc_now(), item_id, user["id"]))
+            if cur.rowcount != 1:
+                return _json_error("NOT_FOUND", "Candidate not found in your pipeline.", 404)
+        _audit(user["id"], "recruiter.pipeline_stage_updated", "pipeline_item", item_id, "success", {"stage": stage})
+        return jsonify({"data": {"updated": True, "pipeline_stage": stage}, "request_id": str(uuid.uuid4())})
 
     @app.get("/workspace/saved-jobs")
     @_require_user
@@ -1697,6 +1779,8 @@ def register_core_api(app):
             return redirect("/workspace/applications")
         if module_key == "saved-jobs":
             return redirect("/workspace/saved-jobs")
+        if module_key == "pipeline":
+            return redirect("/workspace/recruiter/pipeline")
         if module_key == "cv-studio":
             return redirect("/workspace/cv-studio")
         if not title:

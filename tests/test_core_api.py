@@ -116,7 +116,14 @@ def test_cv_cache_hit_is_checked_before_debit_and_charges_discount(client):
              json.dumps({"analysis": "cached result"}), core.utc_now()),
         )
         db.commit()
-    response = post_json(http, "/api/v1/ai/actions/cv", payload, headers={"Idempotency-Key": "cv-cache-hit-1"})
+    quote_response = post_json(http, "/api/v1/ai/quote", {"action": "cv", "input": payload["input"]})
+    assert quote_response.status_code == 200
+    quote = quote_response.get_json()["data"]
+    assert quote["credits_cost"] == 10
+    assert quote["remaining_credits"] == 40
+    response = post_json(http, "/api/v1/ai/actions/cv", {
+        "input": payload["input"], "quote_id": quote["quote_id"], "quote_token": quote["quote_token"]
+    }, headers={"Idempotency-Key": "cv-cache-hit-1"})
     assert response.status_code == 200
     body = response.get_json()["data"]
     assert body["cache"]["hit"] is True
@@ -125,6 +132,31 @@ def test_cv_cache_hit_is_checked_before_debit_and_charges_discount(client):
     with sqlite3.connect(db_path) as db:
         ledger = db.execute("SELECT delta FROM credit_ledger").fetchall()
     assert ledger == [(-10,)]
+
+
+def test_ai_action_requires_confirmation_and_quote_is_single_use(client):
+    http, db_path, _ = create_and_login(client)
+    with sqlite3.connect(db_path) as db:
+        db.execute("UPDATE users SET credits=100 WHERE email=?", ("candidate@example.com",))
+        db.commit()
+    payload = {"input": {"message": "Help me plan my job search."}}
+    rejected = post_json(http, "/api/v1/ai/actions/chat", payload)
+    assert rejected.status_code == 428
+    quote_response = post_json(http, "/api/v1/ai/quote", {"action": "chat", "input": payload["input"]})
+    assert quote_response.status_code == 200
+    quote = quote_response.get_json()["data"]
+    assert quote["credits_cost"] == 5
+    assert quote["total_credits"] == 100
+    assert quote["remaining_credits"] == 95
+    with sqlite3.connect(db_path) as db:
+        balance = db.execute("SELECT credits FROM users WHERE email=?", ("candidate@example.com",)).fetchone()[0]
+        assert balance == 100
+    action_payload = {"input": payload["input"], "quote_id": quote["quote_id"], "quote_token": quote["quote_token"]}
+    # No provider is configured in tests, so the first confirmation is charged then refunded.
+    first = post_json(http, "/api/v1/ai/actions/chat", action_payload)
+    assert first.status_code == 502
+    second = post_json(http, "/api/v1/ai/actions/chat", action_payload)
+    assert second.status_code == 409
 
 
 def test_cache_hit_without_approved_discount_does_not_charge(client):
@@ -143,7 +175,7 @@ def test_cache_hit_without_approved_discount_does_not_charge(client):
              json.dumps({"reply": "cached"}), core.utc_now()),
         )
         db.commit()
-    response = post_json(http, "/api/v1/ai/actions/chat", {"input": payload})
+    response = post_json(http, "/api/v1/ai/quote", {"action": "chat", "input": payload})
     assert response.status_code == 503
     with sqlite3.connect(db_path) as db:
         balance = db.execute("SELECT credits FROM users WHERE email=?", ("candidate@example.com",)).fetchone()[0]

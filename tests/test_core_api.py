@@ -267,6 +267,48 @@ def test_profile_get_and_patch_are_user_scoped(client):
     assert after["headline"] == "Product Designer"
 
 
+def test_published_job_can_be_saved_applied_to_and_withdrawn(client):
+    http = create_role_user(client, "hiring@example.com", "employer", "Hiring Employer")
+    put_json(http, "/api/v1/onboarding/profile", {
+        "country": "Nigeria",
+        "organization_name": "Verified Hiring Co",
+        "job_title": "Recruitment Lead",
+    })
+    post_json(http, "/api/v1/onboarding/complete", {})
+    created = post_json(http, "/api/v1/jobs", {
+        "title": "Python Backend Developer",
+        "description": "Build and maintain secure APIs, improve database performance and support product delivery.",
+        "location": "Remote, Nigeria",
+        "work_mode": "remote",
+        "employment_type": "full_time",
+    })
+    job_id = created.get_json()["data"]["job_id"]
+    _, db_path, _ = client
+    with sqlite3.connect(db_path) as db:
+        db.execute("UPDATE organizations SET verification_status='verified' WHERE owner_user_id=(SELECT id FROM users WHERE email=?)",
+                   ("hiring@example.com",))
+        db.commit()
+    published = post_json(http, "/api/v1/jobs/" + job_id + "/publish", {})
+    assert published.status_code == 200
+    http = create_role_user(client, "applicant@example.com", "job_seeker", "Test Applicant")
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria", "headline": "Python Developer"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    listing = http.get("/api/v1/jobs?q=Python")
+    assert listing.status_code == 200
+    assert len(listing.get_json()["data"]["jobs"]) == 1
+    assert post_json(http, "/api/v1/jobs/" + job_id + "/save", {}).status_code == 200
+    saved = http.get("/api/v1/saved-jobs")
+    assert len(saved.get_json()["data"]) == 1
+    applied = post_json(http, "/api/v1/jobs/" + job_id + "/apply", {"cover_letter": "I am interested in this role and can contribute to the team."})
+    assert applied.status_code == 201
+    application_id = applied.get_json()["data"]["application_id"]
+    applications = http.get("/api/v1/applications")
+    assert len(applications.get_json()["data"]) == 1
+    withdrawn = post_json(http, "/api/v1/applications/" + application_id + "/withdraw", {})
+    assert withdrawn.status_code == 200
+    assert http.get("/api/v1/applications").get_json()["data"][0]["status"] == "withdrawn"
+
+
 def test_employer_can_create_draft_but_cannot_publish_unverified_organisation(client):
     http = create_role_user(client, "employer@example.com", "employer", "Test Employer")
     profile = put_json(http, "/api/v1/onboarding/profile", {

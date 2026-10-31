@@ -717,6 +717,8 @@ def register_core_api(app):
                              "/reset-password", "/verify-email", "/terms", "/privacy",
                              "/onboarding", "/profile", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
                              "/api/v1/dashboard", "/api/v1/saved-jobs"}
+            or request.path == "/api/v1/cvs"
+            or request.path.startswith("/api/v1/cvs/")
             or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/workspace/jobs")
             or request.path.startswith("/workspace/applications")
@@ -1203,6 +1205,71 @@ def register_core_api(app):
             db.execute("UPDATE jobs SET status='published',published_at=?,updated_at=? WHERE id=?", (now, now, job_id))
         _audit(user["id"], "job.published", "job", job_id, "success")
         return jsonify({"data": {"published": True}, "request_id": str(uuid.uuid4())})
+
+    @app.get("/api/v1/cvs")
+    @_require_user
+    def core_cv_list():
+        user = _current_user()
+        with _connect() as db:
+            rows = db.execute("SELECT id,title,document_status,created_at,updated_at FROM cv_documents WHERE user_id=? ORDER BY updated_at DESC",
+                              (user["id"],)).fetchall()
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/cvs")
+    @_require_user
+    def core_cv_create():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        content = str(data.get("content_text", ""))
+        if not title or len(title) > 160 or len(content) > 50000:
+            return _json_error("VALIDATION_ERROR", "Provide a CV title and keep document content under 50,000 characters.", 400)
+        cv_id, now = str(uuid.uuid4()), utc_now()
+        with _connect() as db:
+            db.execute("INSERT INTO cv_documents(id,user_id,title,content_text,document_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                       (cv_id, user["id"], title, content, "draft", now, now))
+        _audit(user["id"], "cv.created", "cv_document", cv_id, "success")
+        return jsonify({"data": {"id": cv_id, "title": title, "document_status": "draft"},
+                        "request_id": str(uuid.uuid4())}), 201
+
+    @app.get("/api/v1/cvs/<cv_id>")
+    @_require_user
+    def core_cv_get(cv_id):
+        user = _current_user()
+        with _connect() as db:
+            row = db.execute("SELECT id,title,content_text,document_status,created_at,updated_at FROM cv_documents WHERE id=? AND user_id=?",
+                             (cv_id, user["id"])).fetchone()
+        if not row:
+            return _json_error("NOT_FOUND", "CV document not found.", 404)
+        return jsonify({"data": dict(row), "request_id": str(uuid.uuid4())})
+
+    @app.patch("/api/v1/cvs/<cv_id>")
+    @_require_user
+    def core_cv_update(cv_id):
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        content = str(data.get("content_text", ""))
+        if not title or len(title) > 160 or len(content) > 50000:
+            return _json_error("VALIDATION_ERROR", "Provide a CV title and keep document content under 50,000 characters.", 400)
+        with _connect() as db:
+            cur = db.execute("UPDATE cv_documents SET title=?,content_text=?,updated_at=? WHERE id=? AND user_id=?",
+                             (title, content, utc_now(), cv_id, user["id"]))
+            if cur.rowcount != 1:
+                return _json_error("NOT_FOUND", "CV document not found.", 404)
+        _audit(user["id"], "cv.updated", "cv_document", cv_id, "success")
+        return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})
+
+    @app.delete("/api/v1/cvs/<cv_id>")
+    @_require_user
+    def core_cv_delete(cv_id):
+        user = _current_user()
+        with _connect() as db:
+            cur = db.execute("DELETE FROM cv_documents WHERE id=? AND user_id=?", (cv_id, user["id"]))
+            if cur.rowcount != 1:
+                return _json_error("NOT_FOUND", "CV document not found.", 404)
+        _audit(user["id"], "cv.deleted", "cv_document", cv_id, "success")
+        return jsonify({"data": {"deleted": True}, "request_id": str(uuid.uuid4())})
 
     @app.get("/api/v1/saved-jobs")
     @_require_user

@@ -612,7 +612,7 @@ def register_core_api(app):
             if not session.get("core_user_id"):
                 return redirect("/auth/login")
             return None
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path != "/api/v1/payments/paystack/webhook":
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path != "/api/v1/payments/paystack/webhook" and not request.path.startswith("/api/v1/mobile/auth/"):
             expected = session.get("csrf_token", "")
             supplied = request.headers.get("X-CSRF-Token", "")
             if not expected or not supplied or not hmac.compare_digest(expected, supplied):
@@ -622,6 +622,7 @@ def register_core_api(app):
                              "/reset-password", "/verify-email", "/terms", "/privacy",
                              "/onboarding", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages"}
             or request.path.startswith("/api/v1/auth/")
+            or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")
             or request.path.startswith("/api/v1/ai/actions/")
             or request.path.startswith("/api/v1/payments/")
@@ -1043,6 +1044,87 @@ def register_core_api(app):
         _audit(row["user_id"], "auth.password_reset", "user", row["user_id"], "success")
         return jsonify({"data": {"password_updated": True, "sessions_revoked": True},
                          "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/mobile/auth/login")
+    def core_mobile_login():
+        data = request.get_json(silent=True) or {}
+        email = str(data.get("email", "")).strip().lower()
+        password = str(data.get("password", ""))
+        bucket = hashlib.sha256(((request.remote_addr or "unknown") + ":" + email).encode()).hexdigest()
+        if not _rate_limit("mobile-login:" + bucket, 8, 900):
+            return _json_error("RATE_LIMITED", "Too many sign-in attempts. Wait before trying again.", 429)
+        with _connect() as db:
+            user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if not user or not check_password_hash(user["password_hash"], password):
+            return _json_error("INVALID_CREDENTIALS", "Email or password is incorrect.", 401)
+        if user["account_status"] == "pending_verification" or not user["email_verified_at"]:
+            return _json_error("EMAIL_NOT_VERIFIED", "Verify your email address before signing in.", 403)
+        if user["account_status"] != "active":
+            return _json_error("ACCOUNT_UNAVAILABLE", "This account cannot access the service.", 403)
+        refresh, family, _ = _issue_mobile_refresh(user["id"])
+        access = _issue_mobile_access(user, family)
+        _audit(user["id"], "mobile.auth.login", "user", user["id"], "success")
+        return jsonify({"data": {"access_token": access, "token_type": "Bearer", "expires_in": 900,
+                                 "refresh_token": refresh, "refresh_expires_in": 2592000,
+                                 "user": {"id": user["id"], "email": user["email"],
+                                          "full_name": user["full_name"], "role": user["role"]}},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/mobile/auth/refresh")
+    def core_mobile_refresh():
+        data = request.get_json(silent=True) or {}
+        raw = str(data.get("refresh_token", "")).strip()
+        if not raw:
+            return _json_error("VALIDATION_ERROR", "Refresh token is required.", 400)
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        with _connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            token = db.execute("SELECT * FROM mobile_refresh_tokens WHERE token_hash=?", (digest,)).fetchone()
+            if not token:
+                db.rollback()
+                return _json_error("INVALID_REFRESH_TOKEN", "Sign in again to continue.", 401)
+            if token["consumed_at"] or token["revoked_at"] or token["expires_at"] <= utc_now():
+                db.execute("UPDATE mobile_refresh_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE family_id=?",
+                           (utc_now(), token["family_id"]))
+                db.execute("UPDATE mobile_access_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE family_id=?",
+                           (utc_now(), token["family_id"]))
+                db.commit()
+                return _json_error("REFRESH_TOKEN_REUSE", "This session is no longer valid. Sign in again.", 401)
+            user = db.execute("SELECT * FROM users WHERE id=? AND account_status='active' AND email_verified_at IS NOT NULL",
+                              (token["user_id"],)).fetchone()
+            if not user:
+                db.rollback()
+                return _json_error("ACCOUNT_UNAVAILABLE", "This account cannot access the service.", 403)
+            new_raw = secrets.token_urlsafe(48)
+            new_id = str(uuid.uuid4())
+            new_expiry = datetime.fromtimestamp(time.time() + 30 * 86400, timezone.utc).isoformat()
+            db.execute("UPDATE mobile_refresh_tokens SET consumed_at=?,replaced_by_id=? WHERE id=?",
+                       (utc_now(), new_id, token["id"]))
+            db.execute("INSERT INTO mobile_refresh_tokens(id,user_id,family_id,token_hash,expires_at,created_at) VALUES(?,?,?,?,?,?)",
+                       (new_id, user["id"], token["family_id"], hashlib.sha256(new_raw.encode()).hexdigest(),
+                        new_expiry, utc_now()))
+            db.commit()
+        access = _issue_mobile_access(user, token["family_id"])
+        return jsonify({"data": {"access_token": access, "token_type": "Bearer", "expires_in": 900,
+                                 "refresh_token": new_raw, "refresh_expires_in": 2592000},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/mobile/auth/logout")
+    def core_mobile_logout():
+        data = request.get_json(silent=True) or {}
+        raw = str(data.get("refresh_token", "")).strip()
+        if raw:
+            digest = hashlib.sha256(raw.encode()).hexdigest()
+            with _connect() as db:
+                token = db.execute("SELECT family_id,user_id FROM mobile_refresh_tokens WHERE token_hash=?", (digest,)).fetchone()
+                if token:
+                    now = utc_now()
+                    db.execute("UPDATE mobile_refresh_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE family_id=?",
+                               (now, token["family_id"]))
+                    db.execute("UPDATE mobile_access_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE family_id=?",
+                               (now, token["family_id"]))
+                    _audit(token["user_id"], "mobile.auth.logout", "user", token["user_id"], "success")
+        return jsonify({"data": {"logged_out": True}, "request_id": str(uuid.uuid4())})
 
     @app.post("/api/v1/auth/register")
     def core_register():

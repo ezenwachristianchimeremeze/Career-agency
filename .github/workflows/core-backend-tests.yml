@@ -1,0 +1,24 @@
+name: Career Agency Core Backend Tests
+
+on:
+  push:
+    branches:
+      - career-agency-production-rebuild
+  pull_request:
+    branches:
+      - career-agency-production-rebuild
+
+jobs:
+  core-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip Flask pytest
+      - name: Compile backend modules
+        run: python -m py_compile app.py career_agency_core.py
+      - name: Run core backend tests
+        run: python -m pytest -q tests/test_core_api.py

@@ -1086,6 +1086,21 @@ def register_core_api(app):
         _audit(user["id"], "job.published", "job", job_id, "success")
         return jsonify({"data": {"published": True}, "request_id": str(uuid.uuid4())})
 
+    @app.get("/api/v1/saved-jobs")
+    @_require_user
+    def core_saved_jobs_list():
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return _json_error("FORBIDDEN", "Only job seekers can view saved jobs.", 403)
+        with _connect() as db:
+            rows = db.execute("""SELECT j.id,j.title,j.location,j.work_mode,j.employment_type,
+                                 j.published_at,o.name AS organisation_name
+                                 FROM saved_jobs s JOIN jobs j ON j.id=s.job_id
+                                 LEFT JOIN organizations o ON o.id=j.organization_id
+                                 WHERE s.user_id=? AND j.status='published'
+                                 ORDER BY s.created_at DESC""", (user["id"],)).fetchall()
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
     @app.post("/api/v1/jobs/<job_id>/save")
     @_require_user
     def core_job_save(job_id):

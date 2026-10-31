@@ -183,7 +183,10 @@ def test_root_is_login_first_then_onboarding_then_workspace(client):
     create_and_login(client)
     root = http.get("/", follow_redirects=False)
     assert root.status_code == 302
-    assert root.headers["Location"].endswith("/onboarding")
+    assert root.headers["Location"].endswith("/workspace")
+    workspace_redirect = http.get("/workspace", follow_redirects=False)
+    assert workspace_redirect.status_code == 302
+    assert workspace_redirect.headers["Location"].endswith("/onboarding")
     assert http.get("/onboarding").status_code == 200
     assert put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria", "city": "Port Harcourt"}).status_code == 200
     assert put_json(http, "/api/v1/onboarding/preferences", {"desired_roles": ["Software Developer"], "work_modes": ["Remote"]}).status_code == 200

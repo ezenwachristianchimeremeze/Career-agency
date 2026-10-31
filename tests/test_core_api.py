@@ -676,3 +676,70 @@ def test_auth_screens_render_and_login_is_dark(client):
         assert b"Manrope" in response.data
     assert b"Welcome back." in http.get("/auth/login").data
     assert b"background:" in http.get("/auth/login").data
+
+
+
+def test_only_approved_credit_package_endpoints_are_active(client):
+    http, _, _ = create_and_login(client)
+    response = http.get("/api/v1/credit-packages")
+    assert response.status_code == 200
+    packages = response.get_json()["data"]["packages"]
+    assert {(p["price_kobo"], p["credits"]) for p in packages} == {
+        (50_000, 100),
+        (20_000_000, 120_000),
+    }
+
+
+def test_employer_can_schedule_interview_and_candidate_can_only_view_it(client):
+    http, db_path, _ = create_and_login(client)
+    with sqlite3.connect(db_path) as db:
+        candidate_id = db.execute(
+            "SELECT id FROM users WHERE email='candidate@example.com'"
+        ).fetchone()[0]
+    http.post("/api/v1/auth/logout")
+    employer_http = create_role_user(client, "employer@example.com", "employer", "Test Employer")
+    with sqlite3.connect(db_path) as db:
+        employer_id = db.execute(
+            "SELECT id FROM users WHERE email='employer@example.com'"
+        ).fetchone()[0]
+        job_id, application_id = "job-interview-test", "application-interview-test"
+        now = core.utc_now()
+        db.execute(
+            """INSERT INTO jobs(id,employer_user_id,title,description,status,created_at,updated_at)
+               VALUES(?,?,?,'Test role','published',?,?)""",
+            (job_id, employer_id, "Backend Engineer", now, now),
+        )
+        db.execute(
+            """INSERT INTO applications(id,job_id,applicant_user_id,status,applied_at,updated_at)
+               VALUES(?,?,?,'submitted',?,?)""",
+            (application_id, job_id, candidate_id, now, now),
+        )
+        db.commit()
+    from datetime import datetime, timedelta, timezone
+    scheduled = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    created = post_json(employer_http, "/api/v1/interviews", {
+        "application_id": application_id,
+        "scheduled_at": scheduled,
+        "duration_minutes": 45,
+        "meeting_url": "https://meet.example.com/interview",
+    })
+    assert created.status_code == 201
+    interview_id = created.get_json()["data"]["id"]
+    listed = employer_http.get("/api/v1/interviews")
+    assert listed.status_code == 200
+    assert len(listed.get_json()["data"]) == 1
+    assert listed.get_json()["data"][0]["applicant_name"] == "Test Candidate"
+    http = client[0]
+    http.post("/api/v1/auth/logout")
+    post_json(http, "/api/v1/auth/login", {
+        "email": "candidate@example.com",
+        "password": "long-test-password-123",
+    })
+    candidate_list = http.get("/api/v1/interviews")
+    assert candidate_list.status_code == 200
+    assert [item["id"] for item in candidate_list.get_json()["data"]] == [interview_id]
+    denied = post_json(http, "/api/v1/interviews", {
+        "application_id": application_id,
+        "scheduled_at": scheduled,
+    })
+    assert denied.status_code == 403

@@ -240,3 +240,13 @@ The first authenticated route is /onboarding. Incomplete accounts are redirected
 | POST | /api/v1/mobile/auth/logout | Revoke a mobile token family |
 
 Access tokens expire after 15 minutes; refresh tokens expire after 30 days. Reuse of a consumed refresh token revokes its family. The existing protected APIs accept the signed Bearer access token. Native clients must store refresh tokens in platform-protected storage.
+
+
+## 11. AI quote and explicit confirmation contract
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /api/v1/ai/quote | Check SQLite cache first and return a short-lived cost quote |
+| POST | /api/v1/ai/actions/{action} | Execute only after a valid quote is confirmed |
+
+The quote response includes quote_id, one-time quote_token, action, cache_hit, credits_cost, total_credits, remaining_credits and a 120-second expiry. The action request must return the quote ID/token with the same action input. The server rechecks cache state and price before an atomic debit; stale or expired quotes require a new confirmation. A quote can be consumed once. A provider failure triggers a ledger refund. No debit occurs when the user cancels because no action endpoint is called.

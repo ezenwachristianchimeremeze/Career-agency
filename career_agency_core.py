@@ -43,8 +43,16 @@ def _db_path() -> str:
     return os.environ.get("CAREER_AGENCY_CORE_DB", "career_agency_core.db")
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path(), timeout=20, isolation_level=None)
+    conn = sqlite3.connect(_db_path(), timeout=20, isolation_level=None, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=20000")

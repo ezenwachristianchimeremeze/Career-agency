@@ -163,6 +163,23 @@ def test_password_reset_invalidates_existing_sessions(client):
     assert response.status_code == 401
 
 
+def test_role_dashboard_metrics_and_workspace_navigation(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    dashboard = http.get("/api/v1/dashboard")
+    assert dashboard.status_code == 200
+    data = dashboard.get_json()["data"]
+    assert data["role"] == "job_seeker"
+    assert data["metrics"]["applications"] == 0
+    page = http.get("/workspace")
+    assert page.status_code == 200
+    assert b"Welcome back, Test Candidate" in page.data
+    module = http.get("/workspace/modules/cv-studio")
+    assert module.status_code == 200
+    assert b"CV Studio" in module.data
+
+
 def test_mobile_login_bearer_access_and_refresh_rotation(client):
     _, _, app = create_and_login(client)
     mobile = app.test_client()

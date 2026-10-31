@@ -246,6 +246,40 @@ def test_wallet_screen_shows_balance_and_inactive_package_state(client):
     assert http.get("/workspace/modules/wallet").status_code == 302
 
 
+def test_account_export_contains_only_current_users_data(client):
+    http, _, _ = create_and_login(client)
+    post_json(http, "/api/v1/cvs", {"title": "Export CV", "content_text": "My CV content."})
+    exported = http.get("/api/v1/account/export")
+    assert exported.status_code == 200
+    data = exported.get_json()["data"]
+    assert data["account"]["email"] == "candidate@example.com"
+    assert data["cv_documents"][0]["content_text"] == "My CV content."
+    assert "password_hash" not in data["account"]
+
+
+def test_change_password_revokes_browser_session_and_requires_new_login(client):
+    http, _, _ = create_and_login(client)
+    changed = post_json(http, "/api/v1/account/change-password", {
+        "current_password": "long-test-password-123",
+        "new_password": "new-long-password-456",
+        "confirm_password": "new-long-password-456",
+    })
+    assert changed.status_code == 200
+    assert changed.get_json()["data"]["sessions_revoked"] is True
+    assert http.get("/api/v1/wallet").status_code == 401
+    login = post_json(http, "/api/v1/auth/login", {
+        "email": "candidate@example.com",
+        "password": "new-long-password-456",
+    })
+    assert login.status_code == 200
+
+
+def test_settings_security_and_privacy_export_screens_render(client):
+    http, _, _ = create_and_login(client)
+    assert http.get("/settings").status_code == 200
+    assert http.get("/settings/security").status_code == 200
+
+
 def test_notifications_are_scoped_and_can_be_marked_read(client):
     http, db_path, _ = create_and_login(client)
     with sqlite3.connect(db_path) as db:

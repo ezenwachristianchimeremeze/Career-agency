@@ -71,9 +71,27 @@ def _init_db() -> None:
             role TEXT NOT NULL CHECK(role IN ('job_seeker','employer','recruiter','admin')),
             account_status TEXT NOT NULL DEFAULT 'active',
             email_verified_at TEXT,
+            session_version INTEGER NOT NULL DEFAULT 1,
             credits INTEGER NOT NULL DEFAULT 0 CHECK(credits >= 0),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            purpose TEXT NOT NULL CHECK(purpose IN ('email_verification','password_reset')),
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_tokens_user_purpose
+            ON auth_tokens(user_id,purpose,created_at DESC);
+        CREATE TABLE IF NOT EXISTS auth_rate_limits (
+            bucket_key TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            window_started_at INTEGER NOT NULL,
+            blocked_until INTEGER
         );
         CREATE TABLE IF NOT EXISTS credit_packages (
             id TEXT PRIMARY KEY,
@@ -440,9 +458,9 @@ location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=fals
                 db.execute(
                     """INSERT INTO users(id,email,password_hash,full_name,role,account_status,
                        email_verified_at,credits,created_at,updated_at)
-                       VALUES(?,?,?,?,?,'active',?,0,?,?)""",
+                       VALUES(?,?,?,?,?,'pending_verification',NULL,0,?,?)""",
                     (user_id, email.lower(), generate_password_hash(password, method="scrypt"),
-                     name, role, now, now, now),
+                     name, role, now, now),
                 )
         except sqlite3.IntegrityError:
             return _json_error("CONFLICT", "An account with these details may already exist.", 409)
@@ -457,8 +475,12 @@ location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=fals
         password = str(data.get("password", ""))
         with _connect() as db:
             user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-        if not user or user["account_status"] != "active" or not check_password_hash(user["password_hash"], password):
+        if not user or not check_password_hash(user["password_hash"], password):
             return _json_error("INVALID_CREDENTIALS", "Email or password is incorrect.", 401)
+        if user["account_status"] == "pending_verification" or not user["email_verified_at"]:
+            return _json_error("EMAIL_NOT_VERIFIED", "Verify your email address before signing in.", 403)
+        if user["account_status"] != "active":
+            return _json_error("ACCOUNT_UNAVAILABLE", "This account cannot access the service.", 403)
         session.clear()
         session["core_user_id"] = user["id"]
         session["core_role"] = user["role"]

@@ -195,3 +195,10 @@ The core backend now creates these additional tables:
 - users.onboarding_completed_at: records when initial setup is complete.
 
 All records are linked to the authenticated user through foreign keys. Employer organisation creation is scoped to the owner. Public onboarding never grants admin role.
+
+
+## 10. Mobile session tables
+
+- mobile_refresh_tokens stores only SHA-256 refresh-token hashes, user, token family, expiry, consumption, revocation and replacement ID.
+- mobile_access_tokens stores access-token IDs (jti), user, family, expiry and revocation state so logout and refresh-token reuse can invalidate outstanding access tokens.
+- Password reset increments users.session_version and revokes all associated mobile tokens.

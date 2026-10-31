@@ -100,3 +100,8 @@ python -m pytest -q tests/test_core_api.py
 ```
 
 A passing core test workflow is not equivalent to a full regression test of the existing 8,500-line legacy application or a production security review.
+
+
+## Mobile authentication
+
+Native mobile clients can use the endpoints and token-storage rules in docs/MOBILE_AUTH_AND_ONBOARDING.md. Backend token APIs are implemented, but native application screens and device testing are not yet complete.

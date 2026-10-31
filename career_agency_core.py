@@ -788,6 +788,7 @@ def register_core_api(app):
             or request.path.startswith("/workspace/cv-studio")
             or request.path.startswith("/workspace/cover-letters")
             or request.path.startswith("/workspace/interview-prep")
+            or request.path.startswith("/workspace/interviews")
             or request.path.startswith("/workspace/recruiter/pipeline")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
@@ -1405,6 +1406,59 @@ def register_core_api(app):
                   "generated_at": utc_now()}
         _audit(user["id"], "privacy.account_exported", "user", user["id"], "success")
         return jsonify({"data": export, "request_id": str(uuid.uuid4())})
+
+    @app.get("/workspace/interviews")
+    @_require_user
+    def core_interviews_screen():
+        user = _current_user()
+        can_schedule = user["role"] in {"employer", "admin"}
+        schedule_form = """
+        <section class="panel" style="margin-bottom:20px">
+          <h2>Schedule an interview</h2>
+          <form id="schedule-form">
+            <label>Application</label><select name="application_id" id="application-id" required><option value="">Loading applications…</option></select>
+            <label>Date and time</label><input name="scheduled_at" type="datetime-local" required>
+            <label>Duration</label><select name="duration_minutes"><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option><option value="90">90 minutes</option></select>
+            <label>Secure meeting link (optional)</label><input name="meeting_url" type="url" placeholder="https://…">
+            <button type="submit" id="schedule-button">Schedule interview</button>
+            <p id="schedule-message" role="status"></p>
+          </form>
+        </section>""" if can_schedule else ""
+        content = schedule_form + """
+        <section class="panel"><h2>Interview calendar</h2>
+          <p id="calendar-message" role="status">Loading your interviews…</p>
+          <div id="interview-list" style="display:grid;gap:12px"></div>
+        </section>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const list=document.getElementById("interview-list"),notice=document.getElementById("calendar-message");
+        const csrf=async()=>{const r=await fetch("/api/v1/auth/csrf");const x=await r.json();if(!r.ok)throw new Error("Could not verify this session.");return x.data.csrf_token;};
+        const load=async()=>{try{const r=await fetch("/api/v1/interviews");const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to load interviews.");
+          list.replaceChildren();notice.textContent=x.data.length?"Your scheduled interviews":"No interviews have been scheduled yet.";
+          x.data.forEach(item=>{const card=document.createElement("article");card.style.cssText="padding:16px;border:1px solid #344560;border-radius:14px;background:#0b1628";
+            const heading=document.createElement("h3");heading.textContent=item.job_title||"Interview";heading.style.margin="0 0 8px";
+            const who=document.createElement("p");who.textContent="Candidate: "+(item.applicant_name||"Candidate")+" · Employer: "+(item.employer_name||"Employer");
+            const when=document.createElement("p");when.textContent=new Date(item.scheduled_at).toLocaleString()+" · "+item.duration_minutes+" minutes";
+            const status=document.createElement("p");status.textContent="Status: "+item.status;
+            card.append(heading,who,when,status);
+            if(item.meeting_url){const link=document.createElement("a");link.href=item.meeting_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="Open meeting link";card.append(link);}
+            list.append(card);});
+        }catch(e){notice.textContent=e.message;}};
+        load();
+        const form=document.getElementById("schedule-form");
+        if(form){const select=document.getElementById("application-id"),message=document.getElementById("schedule-message"),button=document.getElementById("schedule-button");
+          fetch("/api/v1/applications").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to load applications.");
+            select.replaceChildren(new Option("Choose an application",""));
+            x.data.forEach(a=>{const label=(a.applicant_name||"Applicant")+" — "+(a.title||"Job")+" ("+a.status+")";select.add(new Option(label,a.id));});
+            if(!x.data.length)select.add(new Option("No applications available",""));}).catch(e=>{select.replaceChildren(new Option(e.message,""));});
+          form.addEventListener("submit",async ev=>{ev.preventDefault();button.disabled=true;message.textContent="";
+            const d=Object.fromEntries(new FormData(form));d.scheduled_at=new Date(d.scheduled_at).toISOString();d.duration_minutes=Number(d.duration_minutes);
+            try{const token=await csrf();const r=await fetch("/api/v1/interviews",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify(d)});
+              const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to schedule interview.");message.textContent="Interview scheduled successfully.";form.reset();load();
+            }catch(e){message.textContent=e.message;}finally{button.disabled=false;}});
+        }
+        """
+        return _auth_page("Interview Calendar", "Schedule, review and manage interview appointments.", content, script)
 
     @app.get("/profile")
     @_require_user

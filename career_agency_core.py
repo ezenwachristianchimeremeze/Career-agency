@@ -1042,6 +1042,10 @@ def register_core_api(app):
             db.execute("UPDATE auth_tokens SET consumed_at=? WHERE id=?", (utc_now(), row["id"]))
             db.execute("UPDATE users SET password_hash=?,session_version=session_version+1,updated_at=? WHERE id=?",
                        (generate_password_hash(password, method="scrypt"), utc_now(), row["user_id"]))
+            db.execute("UPDATE mobile_refresh_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE user_id=?",
+                       (utc_now(), row["user_id"]))
+            db.execute("UPDATE mobile_access_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE user_id=?",
+                       (utc_now(), row["user_id"]))
             db.commit()
         _audit(row["user_id"], "auth.password_reset", "user", row["user_id"], "success")
         return jsonify({"data": {"password_updated": True, "sessions_revoked": True},
@@ -1218,7 +1222,9 @@ def register_core_api(app):
     @_require_user
     def core_me():
         user = _current_user()
-        return jsonify({"data": {"user": dict(user), "wallet": {"credits": user["credits"]}},
+        public_user = {key: user[key] for key in ("id", "email", "full_name", "role", "account_status")}
+        return jsonify({"data": {"user": public_user, "wallet": {"credits": user["credits"],
+                        "onboarding_completed": bool(user["onboarding_completed_at"])}},
                         "request_id": str(uuid.uuid4())})
 
     @app.get("/api/v1/wallet")

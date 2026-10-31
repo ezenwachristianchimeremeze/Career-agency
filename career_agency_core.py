@@ -717,7 +717,7 @@ def register_core_api(app):
             if not session.get("core_user_id"):
                 return redirect("/auth/login")
             return None
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path != "/api/v1/payments/paystack/webhook" and not request.path.startswith("/api/v1/mobile/auth/"):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path != "/api/v1/payments/paystack/webhook" and not request.path.startswith("/api/v1/mobile/auth/") and not request.headers.get("Authorization", "").startswith("Bearer "):
             expected = session.get("csrf_token", "")
             supplied = request.headers.get("X-CSRF-Token", "")
             if not expected or not supplied or not hmac.compare_digest(expected, supplied):

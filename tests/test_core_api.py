@@ -187,8 +187,9 @@ def test_mobile_login_bearer_access_and_refresh_rotation(client):
 
 
 def test_mobile_logout_revokes_access_and_refresh_family(client):
-    http, _, _ = create_and_login(client)
-    login = http.post("/api/v1/mobile/auth/login", json={
+    _, _, app = create_and_login(client)
+    mobile = app.test_client()
+    login = mobile.post("/api/v1/mobile/auth/login", json={
         "email": "candidate@example.com",
         "password": "long-test-password-123",
     })

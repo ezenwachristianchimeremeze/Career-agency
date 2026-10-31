@@ -721,6 +721,10 @@ def register_core_api(app):
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")
+            or request.path == "/api/v1/jobs"
+            or request.path.startswith("/api/v1/jobs/")
+            or request.path == "/api/v1/applications"
+            or request.path.startswith("/api/v1/applications/")
             or request.path == "/api/v1/ai/quote"
             or request.path.startswith("/api/v1/ai/actions/")
             or request.path.startswith("/api/v1/payments/")
@@ -966,6 +970,230 @@ def register_core_api(app):
                         str(data.get("professional_summary", "")).strip()[:3000] or None, years, now, now))
         _audit(user["id"], "profile.updated", "user", user["id"], "success")
         return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})
+
+    @app.get("/api/v1/jobs")
+    @_require_user
+    def core_jobs_list():
+        user = _current_user()
+        q = str(request.args.get("q", "")).strip()[:120]
+        location = str(request.args.get("location", "")).strip()[:120]
+        work_mode = str(request.args.get("work_mode", "")).strip()
+        employment_type = str(request.args.get("employment_type", "")).strip()
+        limit = min(max(request.args.get("limit", default=20, type=int), 1), 50)
+        offset = max(request.args.get("offset", default=0, type=int), 0)
+        clauses, params = [], []
+        if user["role"] == "employer":
+            clauses.append("j.employer_user_id=?")
+            params.append(user["id"])
+        elif user["role"] != "admin":
+            clauses.append("j.status='published'")
+        if q:
+            clauses.append("(j.title LIKE ? OR j.description LIKE ?)")
+            params.extend(["%" + q + "%", "%" + q + "%"])
+        if location:
+            clauses.append("j.location LIKE ?")
+            params.append("%" + location + "%")
+        if work_mode:
+            clauses.append("j.work_mode=?")
+            params.append(work_mode)
+        if employment_type:
+            clauses.append("j.employment_type=?")
+            params.append(employment_type)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with _connect() as db:
+            rows = db.execute("""SELECT j.id,j.title,j.description,j.location,j.work_mode,j.employment_type,
+                                 j.salary_min_ngn,j.salary_max_ngn,j.status,j.published_at,j.created_at,
+                                 o.name AS organisation_name FROM jobs j
+                                 LEFT JOIN organizations o ON o.id=j.organization_id""" + where +
+                               " ORDER BY COALESCE(j.published_at,j.created_at) DESC LIMIT ? OFFSET ?",
+                               tuple(params + [limit, offset])).fetchall()
+        return jsonify({"data": {"jobs": [dict(row) for row in rows], "limit": limit, "offset": offset},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/jobs")
+    @_require_user
+    def core_job_create():
+        user = _current_user()
+        if user["role"] != "employer":
+            return _json_error("FORBIDDEN", "Only employer accounts can create jobs.", 403)
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        description = str(data.get("description", "")).strip()
+        location = str(data.get("location", "")).strip()
+        work_mode = str(data.get("work_mode", "onsite")).lower()
+        employment_type = str(data.get("employment_type", "full_time")).lower()
+        if not title or len(title) > 160 or len(description) < 40 or len(description) > 20000:
+            return _json_error("VALIDATION_ERROR", "Provide a job title and a description of at least 40 characters.", 400)
+        if work_mode not in {"remote", "hybrid", "onsite"}:
+            return _json_error("VALIDATION_ERROR", "Choose a valid work mode.", 400)
+        if employment_type not in {"full_time", "part_time", "contract", "internship", "temporary"}:
+            return _json_error("VALIDATION_ERROR", "Choose a valid employment type.", 400)
+        def optional_int(key):
+            value = data.get(key)
+            if value in (None, ""):
+                return None
+            try:
+                parsed = int(value)
+                return parsed if parsed >= 0 else None
+            except (TypeError, ValueError):
+                return None
+        salary_min, salary_max = optional_int("salary_min_ngn"), optional_int("salary_max_ngn")
+        if salary_min is not None and salary_max is not None and salary_max < salary_min:
+            return _json_error("VALIDATION_ERROR", "Maximum salary cannot be lower than minimum salary.", 400)
+        with _connect() as db:
+            employer = db.execute("SELECT organization_id FROM employer_profiles WHERE user_id=?", (user["id"],)).fetchone()
+            if not employer or not employer["organization_id"]:
+                return _json_error("ONBOARDING_INCOMPLETE", "Complete employer organisation setup first.", 400)
+            job_id, now = str(uuid.uuid4()), utc_now()
+            db.execute("""INSERT INTO jobs(id,employer_user_id,organization_id,title,description,location,work_mode,
+                          employment_type,salary_min_ngn,salary_max_ngn,status,created_at,updated_at)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,'draft',?,?)""",
+                       (job_id, user["id"], employer["organization_id"], title, description, location or None,
+                        work_mode, employment_type, salary_min, salary_max, now, now))
+        _audit(user["id"], "job.created", "job", job_id, "success")
+        return jsonify({"data": {"job_id": job_id, "status": "draft"}, "request_id": str(uuid.uuid4())}), 201
+
+    @app.get("/api/v1/jobs/<job_id>")
+    @_require_user
+    def core_job_detail(job_id):
+        user = _current_user()
+        with _connect() as db:
+            job = db.execute("""SELECT j.*,o.name AS organisation_name FROM jobs j
+                                LEFT JOIN organizations o ON o.id=j.organization_id WHERE j.id=?""",
+                             (job_id,)).fetchone()
+        if not job:
+            return _json_error("NOT_FOUND", "Job not found.", 404)
+        if job["status"] != "published" and user["role"] != "admin" and job["employer_user_id"] != user["id"]:
+            return _json_error("NOT_FOUND", "Job not found.", 404)
+        return jsonify({"data": dict(job), "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/jobs/<job_id>/publish")
+    @_require_user
+    def core_job_publish(job_id):
+        user = _current_user()
+        if user["role"] not in {"employer", "admin"}:
+            return _json_error("FORBIDDEN", "Employer permission is required.", 403)
+        with _connect() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not job or (user["role"] != "admin" and job["employer_user_id"] != user["id"]):
+                return _json_error("NOT_FOUND", "Job not found.", 404)
+            org = db.execute("SELECT verification_status FROM organizations WHERE id=?", (job["organization_id"],)).fetchone()
+            if not org or org["verification_status"] != "verified":
+                return _json_error("ORGANISATION_NOT_VERIFIED", "Your organisation must be verified before publishing jobs.", 403)
+            now = utc_now()
+            db.execute("UPDATE jobs SET status='published',published_at=?,updated_at=? WHERE id=?", (now, now, job_id))
+        _audit(user["id"], "job.published", "job", job_id, "success")
+        return jsonify({"data": {"published": True}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/jobs/<job_id>/save")
+    @_require_user
+    def core_job_save(job_id):
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return _json_error("FORBIDDEN", "Only job seekers can save jobs.", 403)
+        with _connect() as db:
+            if not db.execute("SELECT 1 FROM jobs WHERE id=? AND status='published'", (job_id,)).fetchone():
+                return _json_error("NOT_FOUND", "Job not found.", 404)
+            db.execute("INSERT OR IGNORE INTO saved_jobs(user_id,job_id,created_at) VALUES(?,?,?)",
+                       (user["id"], job_id, utc_now()))
+        return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})
+
+    @app.delete("/api/v1/jobs/<job_id>/save")
+    @_require_user
+    def core_job_unsave(job_id):
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return _json_error("FORBIDDEN", "Only job seekers can manage saved jobs.", 403)
+        with _connect() as db:
+            db.execute("DELETE FROM saved_jobs WHERE user_id=? AND job_id=?", (user["id"], job_id))
+        return jsonify({"data": {"saved": False}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/jobs/<job_id>/apply")
+    @_require_user
+    def core_job_apply(job_id):
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return _json_error("FORBIDDEN", "Only job seekers can apply to jobs.", 403)
+        data = request.get_json(silent=True) or {}
+        cv_id = str(data.get("cv_document_id", "")).strip() or None
+        cover = str(data.get("cover_letter", "")).strip()
+        if len(cover) > 5000:
+            return _json_error("VALIDATION_ERROR", "Cover letter must not exceed 5000 characters.", 400)
+        with _connect() as db:
+            if not db.execute("SELECT 1 FROM jobs WHERE id=? AND status='published'", (job_id,)).fetchone():
+                return _json_error("NOT_FOUND", "This job is not available for applications.", 404)
+            if cv_id and not db.execute("SELECT 1 FROM cv_documents WHERE id=? AND user_id=?", (cv_id, user["id"])).fetchone():
+                return _json_error("INVALID_CV", "Choose a CV from your own document library.", 400)
+            if db.execute("SELECT 1 FROM applications WHERE job_id=? AND applicant_user_id=?", (job_id, user["id"])).fetchone():
+                return _json_error("ALREADY_APPLIED", "You have already applied to this job.", 409)
+            application_id, now = str(uuid.uuid4()), utc_now()
+            db.execute("""INSERT INTO applications(id,job_id,applicant_user_id,cv_document_id,cover_letter,status,applied_at,updated_at)
+                          VALUES(?,?,?,?,?,'submitted',?,?)""",
+                       (application_id, job_id, user["id"], cv_id, cover or None, now, now))
+        _audit(user["id"], "job.application_submitted", "application", application_id, "success")
+        return jsonify({"data": {"application_id": application_id, "status": "submitted"},
+                        "request_id": str(uuid.uuid4())}), 201
+
+    @app.get("/api/v1/applications")
+    @_require_user
+    def core_applications_list():
+        user = _current_user()
+        limit = min(max(request.args.get("limit", default=30, type=int), 1), 100)
+        with _connect() as db:
+            if user["role"] == "job_seeker":
+                rows = db.execute("""SELECT a.id,a.status,a.applied_at,a.updated_at,j.id AS job_id,j.title,j.location,
+                                     o.name AS organisation_name FROM applications a JOIN jobs j ON j.id=a.job_id
+                                     LEFT JOIN organizations o ON o.id=j.organization_id
+                                     WHERE a.applicant_user_id=? ORDER BY a.applied_at DESC LIMIT ?""",
+                                  (user["id"], limit)).fetchall()
+            elif user["role"] == "employer":
+                rows = db.execute("""SELECT a.id,a.status,a.applied_at,a.updated_at,j.id AS job_id,j.title,
+                                     u.full_name AS applicant_name FROM applications a JOIN jobs j ON j.id=a.job_id
+                                     JOIN users u ON u.id=a.applicant_user_id WHERE j.employer_user_id=?
+                                     ORDER BY a.applied_at DESC LIMIT ?""", (user["id"], limit)).fetchall()
+            elif user["role"] == "admin":
+                rows = db.execute("""SELECT a.id,a.status,a.applied_at,a.updated_at,j.id AS job_id,j.title,
+                                     u.full_name AS applicant_name FROM applications a JOIN jobs j ON j.id=a.job_id
+                                     JOIN users u ON u.id=a.applicant_user_id ORDER BY a.applied_at DESC LIMIT ?""",
+                                  (limit,)).fetchall()
+            else:
+                rows = []
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/applications/<application_id>/status")
+    @_require_user
+    def core_application_status(application_id):
+        user = _current_user()
+        if user["role"] not in {"employer", "admin"}:
+            return _json_error("FORBIDDEN", "Employer permission is required.", 403)
+        data = request.get_json(silent=True) or {}
+        status = str(data.get("status", ""))
+        if status not in {"reviewing", "shortlisted", "interview", "rejected", "offer"}:
+            return _json_error("VALIDATION_ERROR", "Choose a valid application status.", 400)
+        with _connect() as db:
+            row = db.execute("SELECT a.id,j.employer_user_id FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                             (application_id,)).fetchone()
+            if not row or (user["role"] != "admin" and row["employer_user_id"] != user["id"]):
+                return _json_error("NOT_FOUND", "Application not found.", 404)
+            db.execute("UPDATE applications SET status=?,updated_at=? WHERE id=?", (status, utc_now(), application_id))
+        _audit(user["id"], "application.status_updated", "application", application_id, "success", {"status": status})
+        return jsonify({"data": {"updated": True, "status": status}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/applications/<application_id>/withdraw")
+    @_require_user
+    def core_application_withdraw(application_id):
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return _json_error("FORBIDDEN", "Only the applicant can withdraw an application.", 403)
+        with _connect() as db:
+            row = db.execute("SELECT id,status FROM applications WHERE id=? AND applicant_user_id=?",
+                             (application_id, user["id"])).fetchone()
+            if not row:
+                return _json_error("NOT_FOUND", "Application not found.", 404)
+            if row["status"] in {"rejected", "offer", "withdrawn"}:
+                return _json_error("INVALID_TRANSITION", "This application can no longer be withdrawn.", 409)
+            db.execute("UPDATE applications SET status='withdrawn',updated_at=? WHERE id=?", (utc_now(), application_id))
+        return jsonify({"data": {"withdrawn": True}, "request_id": str(uuid.uuid4())})
 
     @app.get("/api/v1/dashboard")
     @_require_user

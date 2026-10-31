@@ -274,6 +274,38 @@ def test_change_password_revokes_browser_session_and_requires_new_login(client):
     assert login.status_code == 200
 
 
+def test_production_mode_requires_secret_and_secure_cookie(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAREER_AGENCY_ENV", "production")
+    monkeypatch.delenv("CAREER_AGENCY_SECRET_KEY", raising=False)
+    app = Flask(__name__)
+    with pytest.raises(RuntimeError):
+        core.register_core_api(app)
+    monkeypatch.setenv("CAREER_AGENCY_SECRET_KEY", "x" * 64)
+    monkeypatch.setenv("CAREER_AGENCY_CORE_DB", str(tmp_path / "production-test.sqlite3"))
+    secure_app = Flask("secure-test")
+    core.register_core_api(secure_app)
+    assert secure_app.config["SESSION_COOKIE_SECURE"] is True
+    assert secure_app.config["SESSION_COOKIE_HTTPONLY"] is True
+
+
+def test_password_change_revokes_native_mobile_access_tokens(client):
+    browser, _, app = create_and_login(client)
+    mobile = app.test_client()
+    mobile_login = mobile.post("/api/v1/mobile/auth/login", json={
+        "email": "candidate@example.com",
+        "password": "long-test-password-123",
+    })
+    access = mobile_login.get_json()["data"]["access_token"]
+    assert mobile.get("/api/v1/auth/me", headers={"Authorization": "Bearer " + access}).status_code == 200
+    changed = post_json(browser, "/api/v1/account/change-password", {
+        "current_password": "long-test-password-123",
+        "new_password": "another-long-password-789",
+        "confirm_password": "another-long-password-789",
+    })
+    assert changed.status_code == 200
+    assert mobile.get("/api/v1/auth/me", headers={"Authorization": "Bearer " + access}).status_code == 401
+
+
 def test_settings_security_and_privacy_export_screens_render(client):
     http, _, _ = create_and_login(client)
     assert http.get("/settings").status_code == 200

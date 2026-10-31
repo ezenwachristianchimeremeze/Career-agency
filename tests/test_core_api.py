@@ -327,6 +327,44 @@ def test_notifications_are_scoped_and_can_be_marked_read(client):
     assert http.get("/api/v1/notifications").get_json()["data"][0]["read_at"] is not None
 
 
+def test_cover_letter_library_create_read_update_and_delete(client):
+    http, _, _ = create_and_login(client)
+    created = post_json(http, "/api/v1/cover-letters", {
+        "title": "Technical Writer Application",
+        "company_name": "Example Company",
+        "job_title": "Technical Writer",
+        "content_text": "I am applying for the technical writer role.",
+    })
+    assert created.status_code == 201
+    document_id = created.get_json()["data"]["id"]
+    detail = http.get("/api/v1/cover-letters/" + document_id)
+    assert detail.status_code == 200
+    assert detail.get_json()["data"]["company_name"] == "Example Company"
+    updated = patch_json(http, "/api/v1/cover-letters/" + document_id, {
+        "title": "Updated Application",
+        "company_name": "Example Company",
+        "job_title": "Developer Documentation Writer",
+        "content_text": "I have experience documenting APIs and developer workflows.",
+    })
+    assert updated.status_code == 200
+    assert http.get("/api/v1/cover-letters").get_json()["data"][0]["title"] == "Updated Application"
+    csrf = http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
+    deleted = http.delete("/api/v1/cover-letters/" + document_id, headers={"X-CSRF-Token": csrf})
+    assert deleted.status_code == 200
+    assert http.get("/api/v1/cover-letters/" + document_id).status_code == 404
+
+
+def test_cover_letter_screen_and_module_route(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    page = http.get("/workspace/cover-letters")
+    assert page.status_code == 200
+    assert b"Cover Letter Studio" in page.data
+    assert b"Save letter" in page.data
+    assert b"Delete selected letter" in page.data
+
+
 def test_cv_library_create_read_update_and_delete(client):
     http, _, _ = create_and_login(client)
     created = post_json(http, "/api/v1/cvs", {

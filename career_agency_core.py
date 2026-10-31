@@ -1600,6 +1600,7 @@ def register_core_api(app):
             result = _paystack_request("/transaction/initialize", {
                 "email": user["email"], "amount": int(package["price_kobo"]),
                 "currency": "NGN", "reference": reference,
+                "callback_url": os.environ.get("CAREER_AGENCY_PUBLIC_URL", "").rstrip("/") + "/payments/return",
                 "metadata": {"payment_id": payment_id, "user_id": user["id"], "package_id": package_id},
             })
             if not result.get("status") or not result.get("data", {}).get("authorization_url"):

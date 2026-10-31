@@ -71,6 +71,7 @@ SETTINGS_HTML = '''
 
 import v25_engine
 import os
+import secrets
 import json
 import base64
 import re
@@ -90,6 +91,9 @@ from flask import Flask, Response, render_template_string, request, jsonify, red
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+# Use a configured secret in deployments; generate a per-process fallback for local development.
+# Set SECRET_KEY (or CAREER_AGENCY_SECRET) to a persistent random value to keep sessions across restarts.
+app.secret_key = os.environ.get("SECRET_KEY") or os.environ.get("CAREER_AGENCY_SECRET") or secrets.token_hex(32)
 app.config["MAX_CONTENT_LENGTH"] = 130 * 1024 * 1024
 APP_VERSION = "v1.0.0"
 GEMINI_DAILY_LIMIT = 15
@@ -8587,4 +8591,4 @@ def standalone_settings():
     return render_template_string(SETTINGS_HTML)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=os.environ.get("FLASK_DEBUG", "").strip().lower() == "true")

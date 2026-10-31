@@ -737,6 +737,7 @@ def test_employer_can_schedule_interview_and_candidate_can_only_view_it(client):
     })
     candidate_list = http.get("/api/v1/interviews")
     assert candidate_list.status_code == 200
+    assert http.get("/workspace/interviews").status_code == 200
     assert [item["id"] for item in candidate_list.get_json()["data"]] == [interview_id]
     denied = post_json(http, "/api/v1/interviews", {
         "application_id": application_id,

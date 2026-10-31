@@ -769,6 +769,7 @@ def register_core_api(app):
             or request.path.startswith("/workspace/employer/jobs")
             or request.path.startswith("/workspace/cv-studio")
             or request.path.startswith("/workspace/cover-letters")
+            or request.path.startswith("/workspace/interview-prep")
             or request.path.startswith("/workspace/recruiter/pipeline")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
@@ -1062,6 +1063,38 @@ def register_core_api(app):
         form.addEventListener("submit",async e=>{e.preventDefault();const b=document.getElementById("create"),d=Object.fromEntries(new FormData(form));b.disabled=true;message.textContent="";try{const t=await csrf();const r=await fetch("/api/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save job.");message.textContent="Job saved as a draft. Organisation verification is required before publication.";form.reset();await load();}catch(x){message.textContent=x.message;}finally{b.disabled=false;}});load();
         """
         return _auth_page("Manage jobs", "Create drafts, review your job posts and publish after organisation verification.", content, script)
+
+    @app.get("/workspace/interview-prep")
+    @_require_user
+    def core_interview_prep_screen():
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return redirect("/workspace")
+        content = """
+        <form id="prep-form"><label>Target role</label><input name="role" maxlength="160" required placeholder="e.g. Technical Writer">
+        <label>Company or industry (optional)</label><input name="company" maxlength="160" placeholder="Company or industry">
+        <label>Interview type</label><select name="interview_type"><option value="general">General</option><option value="behavioural">Behavioural</option><option value="technical">Technical</option><option value="competency">Competency-based</option><option value="entry_level">Entry-level</option></select>
+        <label>Experience and context</label><textarea name="background" rows="5" maxlength="5000" placeholder="Share only accurate skills, projects, education and experience."></textarea>
+        <label>What would you like to practise?</label><textarea name="focus" rows="3" maxlength="3000" placeholder="e.g. explaining projects, teamwork, problem-solving"></textarea>
+        <button id="start" type="submit">Prepare mock interview</button></form>
+        <div id="message" class="error" role="status"></div><div id="result" style="display:none;margin-top:18px;padding:17px;border:1px solid #294266;border-radius:14px;background:#0d182a"><h3>Practice questions and guidance</h3><pre id="result-text" style="white-space:pre-wrap;line-height:1.65;font:13px 'DM Sans',sans-serif;color:#d5e1f1"></pre><button id="copy" type="button" style="background:#25354e">Copy practice guide</button></div>
+        <div id="confirm" style="display:none;position:fixed;inset:0;z-index:10;background:#020617d9;place-items:center;padding:18px"><div style="width:min(100%,390px);border:1px solid #344968;border-radius:18px;background:#111d33;padding:22px">
+        <div style="font-size:10px;letter-spacing:.16em;color:#8db8ff;font-weight:800">USING CREDITS</div><h2 style="font:700 19px Manrope;margin:8px 0 20px">Mock interview preparation</h2>
+        <div style="font-size:10px;letter-spacing:.13em;color:#91a3bd">DEBITING CREDITS</div><div id="debit" style="font:800 30px Manrope;margin:5px 0 18px">−50 Credits</div>
+        <div style="display:flex;justify-content:space-between;color:#a8b9d1;font-size:12px;margin:8px 0"><span>Total credits</span><strong id="total">—</strong></div>
+        <div style="display:flex;justify-content:space-between;color:#a8b9d1;font-size:12px;margin:8px 0"><span>Remaining credits</span><strong id="remaining">—</strong></div>
+        <p style="font-size:12px;color:#9aabc3;line-height:1.55">Review the cost before generating practice material. Cancel does not deduct credits.</p>
+        <div style="display:flex;gap:10px"><button id="cancel" type="button" style="margin:0;background:#25354e">Cancel</button><button id="confirm-button" type="button" style="margin:0">Confirm</button></div></div></div>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const form=document.getElementById("prep-form"),msg=document.getElementById("message"),modal=document.getElementById("confirm"),out=document.getElementById("result"),outText=document.getElementById("result-text");let pending=null,payload=null;
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        form.addEventListener("submit",async e=>{e.preventDefault();payload=Object.fromEntries(new FormData(form));const token=await csrf();const r=await fetch("/api/v1/ai/quote",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({action:"mock_interview",input:payload})});const x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Unable to prepare a quote.";return;}pending=x.data;document.getElementById("debit").textContent="−"+x.data.credits_cost+" Credits";document.getElementById("total").textContent=Number(x.data.total_credits).toLocaleString();document.getElementById("remaining").textContent=Number(x.data.remaining_credits).toLocaleString();modal.style.display="grid";msg.textContent="";});
+        document.getElementById("cancel").addEventListener("click",()=>{pending=null;modal.style.display="none";});
+        document.getElementById("confirm-button").addEventListener("click",async()=>{if(!pending)return;const b=document.getElementById("confirm-button");b.disabled=true;b.textContent="Preparing…";try{const token=await csrf();const r=await fetch("/api/v1/ai/actions/mock_interview",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({input:payload,quote_id:pending.quote_id,quote_token:pending.quote_token})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Interview preparation failed.");outText.textContent=typeof x.data.result==="string"?x.data.result:JSON.stringify(x.data.result,null,2);out.style.display="block";modal.style.display="none";pending=null;msg.textContent="Practice guide ready. Review the questions and prepare answers using your real experience.";}catch(e){msg.textContent=e.message;}finally{b.disabled=false;b.textContent="Confirm";}});
+        document.getElementById("copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText(outText.textContent);msg.textContent="Practice guide copied.";}catch(e){msg.textContent="Copy is unavailable in this browser. Select the text to copy it.";}}); 
+        """
+        return _auth_page("Interview Preparation", "Practise role-specific questions and build confidence using accurate examples from your own experience.", content, script)
 
     @app.get("/workspace/cover-letters")
     @_require_user
@@ -2080,6 +2113,8 @@ def register_core_api(app):
             return redirect("/workspace/cv-studio")
         if module_key == "cover-letters":
             return redirect("/workspace/cover-letters")
+        if module_key == "interview-prep":
+            return redirect("/workspace/interview-prep")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

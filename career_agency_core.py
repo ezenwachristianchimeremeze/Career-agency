@@ -596,6 +596,17 @@ location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=fals
             if int(tx.get("amount", -1)) != int(payment["amount_kobo"]):
                 db.rollback()
                 return _json_error("PAYMENT_AMOUNT_MISMATCH", "Verified amount does not match the order.", 400)
+            metadata = tx.get("metadata") or {}
+            if not isinstance(metadata, dict) or (
+                metadata.get("payment_id") != payment["id"]
+                or metadata.get("user_id") != payment["user_id"]
+                or metadata.get("package_id") != payment["package_id"]
+            ):
+                db.rollback()
+                return _json_error("PAYMENT_METADATA_MISMATCH", "Verified transaction metadata does not match the order.", 400)
+            if not tx.get("id") or tx.get("reference") != reference:
+                db.rollback()
+                return _json_error("PAYMENT_REFERENCE_MISMATCH", "Verified transaction reference is invalid.", 400)
             if payment["status"] == "success":
                 db.commit()
                 return jsonify({"received": True, "already_processed": True}), 200

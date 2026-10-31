@@ -118,6 +118,86 @@ def _init_db() -> None:
             window_started_at INTEGER NOT NULL,
             blocked_until INTEGER
         );
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            employer_user_id TEXT NOT NULL REFERENCES users(id),
+            organization_id TEXT REFERENCES organizations(id),
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            location TEXT,
+            work_mode TEXT NOT NULL DEFAULT 'onsite',
+            employment_type TEXT NOT NULL DEFAULT 'full_time',
+            salary_min_ngn INTEGER,
+            salary_max_ngn INTEGER,
+            status TEXT NOT NULL DEFAULT 'draft',
+            published_at TEXT,
+            closes_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status_published ON jobs(status,published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_employer ON jobs(employer_user_id,created_at DESC);
+        CREATE TABLE IF NOT EXISTS applications (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES jobs(id),
+            applicant_user_id TEXT NOT NULL REFERENCES users(id),
+            cv_document_id TEXT,
+            cover_letter TEXT,
+            status TEXT NOT NULL DEFAULT 'submitted',
+            applied_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(job_id,applicant_user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_applications_applicant ON applications(applicant_user_id,applied_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_applications_job ON applications(job_id,status);
+        CREATE TABLE IF NOT EXISTS saved_jobs (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id,job_id)
+        );
+        CREATE TABLE IF NOT EXISTS cv_documents (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            file_key TEXT,
+            content_text TEXT,
+            document_status TEXT NOT NULL DEFAULT 'draft',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cv_user_updated ON cv_documents(user_id,updated_at DESC);
+        CREATE TABLE IF NOT EXISTS interviews (
+            id TEXT PRIMARY KEY,
+            application_id TEXT NOT NULL REFERENCES applications(id),
+            scheduled_at TEXT NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 30,
+            meeting_url TEXT,
+            status TEXT NOT NULL DEFAULT 'scheduled',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            category TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            target_url TEXT,
+            read_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id,created_at DESC);
+        CREATE TABLE IF NOT EXISTS recruiter_pipeline_items (
+            id TEXT PRIMARY KEY,
+            recruiter_user_id TEXT NOT NULL REFERENCES users(id),
+            candidate_name TEXT NOT NULL,
+            candidate_email TEXT,
+            role_title TEXT,
+            pipeline_stage TEXT NOT NULL DEFAULT 'sourced',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS user_profiles (
             user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             phone TEXT,

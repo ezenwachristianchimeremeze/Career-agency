@@ -198,3 +198,8 @@ The UI must not determine access from a locally stored role string.
 ## 10. Native mobile session contract
 
 The backend now supports mobile login, rotating refresh tokens, logout and Bearer access on protected APIs. Native clients must use Android Keystore-backed storage or iOS Keychain; never store refresh tokens in plain preferences or logs. The mobile UI, deep-link verification, push notifications, signed release builds and device testing remain separate delivery work.
+
+
+## 11. Global AI credit confirmation interaction
+
+The AI assistant now requests a quote before running an AI action. The confirmation modal displays USING CREDITS, the feature name, DEBITING CREDITS, the debit amount, total credits and projected remaining credits. Cancel closes the modal without a debit. Confirm submits the one-time quote token; the backend rechecks cache state and atomically consumes the quote and credits. This confirmation pattern must be reused by every paid AI feature across web and mobile.

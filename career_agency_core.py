@@ -898,7 +898,7 @@ def register_core_api(app):
         if(d.password!==d.confirm_password){e.textContent="Your passwords do not match.";return;}
         d.terms_accepted=f.elements.terms_accepted.checked;b.disabled=true;b.textContent="Creating account…";e.textContent="";
         try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify(d)});
-        const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to create account.");location.href="/verify-email?email="+encodeURIComponent(d.email);
+        const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to create account.");location.href="/verify-email?email="+encodeURIComponent(d.email)+"&delivery="+encodeURIComponent(x.data.verification_email||"queued");
         }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Create account";}});
         """
         return _auth_page("Create your account", "Build your next career move with clarity.", content, script)
@@ -944,8 +944,10 @@ def register_core_api(app):
         <div class="links"><a href="/auth/login">Back to sign in</a></div>"""
         script = """
         const f=document.getElementById("auth-form"),b=document.getElementById("submit"),m=document.getElementById("message");
-        f.elements.email.value=new URLSearchParams(location.search).get("email")||"";
-        const token=new URLSearchParams(location.search).get("token");if(token){fetch("/api/v1/auth/csrf").then(x=>x.json()).then(c=>fetch("/api/v1/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({token})})).then(async r=>{const x=await r.json();document.getElementById("status").textContent=r.ok?"Your email is verified. You can now sign in.":(x.error?.message||"This verification link is invalid or expired.");}).catch(()=>{});}
+        const params=new URLSearchParams(location.search);
+        f.elements.email.value=params.get("email")||"";
+        if(params.get("delivery")==="not_configured"){document.getElementById("status").textContent="Your account has been created, but email delivery is not configured yet. You must verify your email before signing in. Please try resending later or contact support.";}
+        const token=params.get("token");if(token){fetch("/api/v1/auth/csrf").then(x=>x.json()).then(c=>fetch("/api/v1/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({token})})).then(async r=>{const x=await r.json();document.getElementById("status").textContent=r.ok?"Your email is verified. You can now sign in.":(x.error?.message||"This verification link is invalid or expired.");}).catch(()=>{});}
         f.addEventListener("submit",async ev=>{ev.preventDefault();b.disabled=true;m.textContent="";try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/resend-verification",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({email:f.elements.email.value})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Please try again.");m.textContent=x.data.message;}catch(x){m.textContent=x.message;}finally{b.disabled=false;}});
         """
         return _auth_page("Verify your email", "One quick confirmation protects your Career Agency account.", content, script)

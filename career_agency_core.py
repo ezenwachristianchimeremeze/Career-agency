@@ -700,7 +700,7 @@ def register_core_api(app):
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
-                             "/onboarding", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
+                             "/onboarding", "/profile", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
                              "/api/v1/dashboard"}
             or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/api/v1/auth/")
@@ -797,6 +797,76 @@ def register_core_api(app):
         }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Save and continue";}});
         """
         return _auth_page("Let's set up your workspace", "A few details help Career Agency prepare the right tools for your account.", content, script)
+
+    @app.get("/profile")
+    @_require_user
+    def core_profile_screen():
+        content = """
+        <form id="profile-form">
+        <label>Full name</label><input name="full_name" autocomplete="name" maxlength="120" required>
+        <label>Email address</label><input name="email" type="email" disabled>
+        <label>Phone number</label><input name="phone" type="tel" maxlength="30">
+        <label>Country</label><input name="country" maxlength="100" required>
+        <label>City or state</label><input name="city" maxlength="100">
+        <label>Professional headline</label><input name="headline" maxlength="160">
+        <label>Professional summary</label><textarea name="professional_summary" maxlength="3000" rows="5"></textarea>
+        <label>Years of experience</label><input name="years_experience" type="number" min="0" max="60">
+        <button id="save" type="submit">Save profile</button><div id="message" class="error" role="status"></div></form>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const f=document.getElementById("profile-form"),b=document.getElementById("save"),m=document.getElementById("message");
+        fetch("/api/v1/profile").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to load profile.");const p=x.data;
+        for(const key of ["full_name","email","phone","country","city","headline","professional_summary","years_experience"]){if(p[key]!==null&&p[key]!==undefined)f.elements[key].value=p[key];}
+        }).catch(e=>m.textContent=e.message);
+        f.addEventListener("submit",async ev=>{ev.preventDefault();const d=Object.fromEntries(new FormData(f));d.years_experience=Number(d.years_experience||0);b.disabled=true;b.textContent="Saving…";m.textContent="";
+        try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/profile",{method:"PATCH",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to save profile.");m.textContent="Your profile has been saved.";
+        }catch(e){m.textContent=e.message;}finally{b.disabled=false;b.textContent="Save profile";}});
+        """
+        return _auth_page("My profile", "Keep your professional information accurate and up to date.", content, script)
+
+    @app.get("/api/v1/profile")
+    @_require_user
+    def core_profile_get():
+        user = _current_user()
+        with _connect() as db:
+            profile = db.execute("SELECT phone,country,city,headline,professional_summary,years_experience FROM user_profiles WHERE user_id=?",
+                                 (user["id"],)).fetchone()
+        data = {"full_name": user["full_name"], "email": user["email"], "role": user["role"]}
+        if profile:
+            data.update(dict(profile))
+        return jsonify({"data": data, "request_id": str(uuid.uuid4())})
+
+    @app.patch("/api/v1/profile")
+    @_require_user
+    def core_profile_update():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        full_name = str(data.get("full_name", user["full_name"])).strip()
+        if not full_name or len(full_name) > 120:
+            return _json_error("VALIDATION_ERROR", "Full name must contain 1 to 120 characters.", 400)
+        country = str(data.get("country", "")).strip()
+        if not country or len(country) > 100:
+            return _json_error("VALIDATION_ERROR", "Country is required.", 400)
+        try:
+            years = int(data.get("years_experience", 0) or 0)
+        except (TypeError, ValueError):
+            return _json_error("VALIDATION_ERROR", "Years of experience must be a whole number.", 400)
+        if years < 0 or years > 60:
+            return _json_error("VALIDATION_ERROR", "Years of experience must be between 0 and 60.", 400)
+        now = utc_now()
+        with _connect() as db:
+            db.execute("UPDATE users SET full_name=?,updated_at=? WHERE id=?", (full_name, now, user["id"]))
+            db.execute("""INSERT INTO user_profiles(user_id,phone,country,city,headline,professional_summary,years_experience,created_at,updated_at)
+                          VALUES(?,?,?,?,?,?,?,?,?)
+                          ON CONFLICT(user_id) DO UPDATE SET phone=excluded.phone,country=excluded.country,city=excluded.city,
+                          headline=excluded.headline,professional_summary=excluded.professional_summary,
+                          years_experience=excluded.years_experience,updated_at=excluded.updated_at""",
+                       (user["id"], str(data.get("phone", "")).strip()[:30] or None, country,
+                        str(data.get("city", "")).strip()[:100] or None,
+                        str(data.get("headline", "")).strip()[:160] or None,
+                        str(data.get("professional_summary", "")).strip()[:3000] or None, years, now, now))
+        _audit(user["id"], "profile.updated", "user", user["id"], "success")
+        return jsonify({"data": {"saved": True}, "request_id": str(uuid.uuid4())})
 
     @app.get("/api/v1/dashboard")
     @_require_user
@@ -1045,6 +1115,8 @@ def register_core_api(app):
             "profile": "My profile", "settings": "Settings", "wallet": "Career Credits wallet"
         }
         title = module_titles.get(module_key)
+        if module_key == "profile":
+            return redirect("/profile")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

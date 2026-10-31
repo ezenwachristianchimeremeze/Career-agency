@@ -366,6 +366,23 @@ def test_cover_letter_library_create_read_update_and_delete(client):
     assert http.get("/api/v1/cover-letters/" + document_id).status_code == 404
 
 
+def test_cover_letters_are_private_to_their_owner(client):
+    owner, _, _ = create_and_login(client)
+    created = post_json(owner, "/api/v1/cover-letters", {
+        "title": "Private letter",
+        "company_name": "Private Company",
+        "job_title": "Writer",
+        "content_text": "This document belongs to the first account.",
+    })
+    document_id = created.get_json()["data"]["id"]
+    other = create_role_user(client, "other-user@example.com", "job_seeker", "Other User")
+    assert other.get("/api/v1/cover-letters/" + document_id).status_code == 404
+    assert other.patch("/api/v1/cover-letters/" + document_id, json={
+        "title": "Attempted access",
+        "content_text": "Should not be able to update another user's letter.",
+    }, headers={"X-CSRF-Token": other.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]}).status_code == 404
+
+
 def test_cover_letter_screen_and_module_route(client):
     http, _, _ = create_and_login(client)
     put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})

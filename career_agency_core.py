@@ -72,6 +72,7 @@ def _init_db() -> None:
             account_status TEXT NOT NULL DEFAULT 'active',
             email_verified_at TEXT,
             session_version INTEGER NOT NULL DEFAULT 1,
+            onboarding_completed_at TEXT,
             credits INTEGER NOT NULL DEFAULT 0 CHECK(credits >= 0),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -92,6 +93,58 @@ def _init_db() -> None:
             attempts INTEGER NOT NULL DEFAULT 0,
             window_started_at INTEGER NOT NULL,
             blocked_until INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            phone TEXT,
+            country TEXT,
+            city TEXT,
+            headline TEXT,
+            professional_summary TEXT,
+            years_experience INTEGER NOT NULL DEFAULT 0,
+            avatar_url TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS career_preferences (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            desired_roles_json TEXT NOT NULL DEFAULT '[]',
+            work_modes_json TEXT NOT NULL DEFAULT '[]',
+            employment_types_json TEXT NOT NULL DEFAULT '[]',
+            preferred_locations_json TEXT NOT NULL DEFAULT '[]',
+            salary_min_ngn INTEGER,
+            salary_max_ngn INTEGER,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS organizations (
+            id TEXT PRIMARY KEY,
+            owner_user_id TEXT NOT NULL REFERENCES users(id),
+            name TEXT NOT NULL,
+            website TEXT,
+            country TEXT,
+            verification_status TEXT NOT NULL DEFAULT 'unverified',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS employer_profiles (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            organization_id TEXT REFERENCES organizations(id),
+            job_title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS recruiter_profiles (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            agency_name TEXT NOT NULL,
+            client_focus TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS onboarding_progress (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            step_key TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            PRIMARY KEY(user_id,step_key)
         );
         CREATE TABLE IF NOT EXISTS credit_packages (
             id TEXT PRIMARY KEY,
@@ -194,6 +247,11 @@ def _init_db() -> None:
             created_at TEXT NOT NULL
         );
         """)
+        user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+        if "onboarding_completed_at" not in user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT")
+        if "session_version" not in user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1")
         for package in CONFIRMED_PACKAGE_ENDPOINTS:
             db.execute(
                 """INSERT OR IGNORE INTO credit_packages
@@ -224,7 +282,7 @@ def _current_user(db=None):
     own = db or _connect()
     try:
         row = own.execute(
-            "SELECT id,email,full_name,role,account_status,credits,session_version FROM users WHERE id=?",
+            "SELECT id,email,full_name,role,account_status,credits,session_version,onboarding_completed_at FROM users WHERE id=?",
             (user_id,),
         ).fetchone()
         if row is None or int(row["session_version"]) != int(session.get("core_session_version", 0)):

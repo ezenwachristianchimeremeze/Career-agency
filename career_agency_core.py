@@ -9,11 +9,12 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import secrets
 import sqlite3
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -53,7 +54,10 @@ class _ClosingConnection(sqlite3.Connection):
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path(), timeout=20, isolation_level=None, factory=_ClosingConnection)
+    db_path = _db_path()
+    if db_path != ":memory:":
+        Path(db_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=20, isolation_level=None, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=20000")
@@ -685,10 +689,20 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.er
 
 def register_core_api(app):
     """Register core routes and auth-first guard on the existing Flask app."""
-    app.secret_key = os.environ.get("CAREER_AGENCY_SECRET_KEY", app.secret_key or secrets.token_hex(32))
-    app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
-    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-    app.config.setdefault("SESSION_COOKIE_SECURE", os.environ.get("CAREER_AGENCY_COOKIE_SECURE", "0") == "1")
+    production = os.environ.get("CAREER_AGENCY_ENV", "development").lower() == "production"
+    configured_secret = os.environ.get("CAREER_AGENCY_SECRET_KEY")
+    if production and (not configured_secret or len(configured_secret) < 48):
+        raise RuntimeError("CAREER_AGENCY_SECRET_KEY must be configured with at least 48 characters in production.")
+    app.secret_key = configured_secret or app.secret_key or secrets.token_urlsafe(48)
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = os.environ.get("CAREER_AGENCY_COOKIE_SECURE", "1" if production else "0") == "1"
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
+    app.config["SESSION_REFRESH_EACH_REQUEST"] = False
+    app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
+    trusted_hosts = os.environ.get("CAREER_AGENCY_TRUSTED_HOSTS", "").strip()
+    if trusted_hosts:
+        app.config["TRUSTED_HOSTS"] = [host.strip() for host in trusted_hosts.split(",") if host.strip()]
     _init_db()
 
     @app.after_request
@@ -2293,6 +2307,7 @@ def register_core_api(app):
         if user["account_status"] != "active":
             return _json_error("ACCOUNT_UNAVAILABLE", "This account cannot access the service.", 403)
         session.clear()
+        session.permanent = True
         session["core_user_id"] = user["id"]
         session["core_role"] = user["role"]
         session["core_session_version"] = int(user["session_version"])

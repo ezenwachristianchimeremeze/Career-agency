@@ -725,9 +725,11 @@ def register_core_api(app):
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
-                             "/onboarding", "/profile", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
+                             "/onboarding", "/profile", "/settings", "/settings/security", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
                              "/api/v1/dashboard", "/api/v1/saved-jobs", "/notifications", "/api/v1/notifications"}
             or request.path.startswith("/api/v1/notifications/")
+            or request.path == "/api/v1/account/export"
+            or request.path == "/api/v1/account/change-password"
             or request.path == "/api/v1/cvs"
             or request.path.startswith("/api/v1/cvs/")
             or request.path == "/api/v1/cvs"
@@ -1199,6 +1201,100 @@ def register_core_api(app):
             cur = db.execute("UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL",
                              (utc_now(), user["id"]))
         return jsonify({"data": {"updated": cur.rowcount}, "request_id": str(uuid.uuid4())})
+
+    @app.get("/settings")
+    @_require_user
+    def core_settings_screen():
+        content = """
+        <div style="display:grid;gap:11px">
+        <a class="action" href="/profile"><b>Personal profile</b><span>Update your name, location and professional information.</span></a>
+        <a class="action" href="/settings/security"><b>Sign-in and security</b><span>Change your password and protect your account.</span></a>
+        <a class="action" href="/wallet"><b>Career Credits</b><span>View your balance and payment history.</span></a>
+        <a class="action" href="/notifications"><b>Notifications</b><span>Review account and career activity updates.</span></a>
+        <button id="export" type="button">Export my account data</button>
+        <div id="message" class="error" role="status"></div></div>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        document.getElementById("export").addEventListener("click",async()=>{const b=document.getElementById("export"),m=document.getElementById("message");b.disabled=true;b.textContent="Preparing export…";try{const r=await fetch("/api/v1/account/export");const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Export failed.");const blob=new Blob([JSON.stringify(x.data,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="career-agency-account-export.json";a.click();URL.revokeObjectURL(url);m.textContent="Your account export has been prepared."; }catch(e){m.textContent=e.message;}finally{b.disabled=false;b.textContent="Export my account data";}});
+        """
+        return _auth_page("Settings", "Manage your account, security and privacy choices.", content, script)
+
+    @app.get("/settings/security")
+    @_require_user
+    def core_security_settings_screen():
+        content = """
+        <form id="password-form"><label>Current password</label><input name="current_password" type="password" autocomplete="current-password" required>
+        <label>New password</label><input name="new_password" type="password" minlength="10" maxlength="1024" autocomplete="new-password" required>
+        <label>Confirm new password</label><input name="confirm_password" type="password" minlength="10" maxlength="1024" autocomplete="new-password" required>
+        <button id="save" type="submit">Change password</button><div id="message" class="error" role="alert"></div></form>
+        <div class="links"><a href="/settings">Back to settings</a></div>"""
+        script = """
+        const f=document.getElementById("password-form"),b=document.getElementById("save"),m=document.getElementById("message");
+        f.addEventListener("submit",async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(f));if(d.new_password!==d.confirm_password){m.textContent="Your new passwords do not match.";return;}b.disabled=true;b.textContent="Updating…";try{const c=await fetch("/api/v1/auth/csrf").then(r=>r.json());const r=await fetch("/api/v1/account/change-password",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to change password.");location.href="/auth/login?password=changed";}catch(x){m.textContent=x.message;b.disabled=false;b.textContent="Change password";}});
+        """
+        return _auth_page("Sign-in and security", "Changing your password signs out other sessions.", content, script)
+
+    @app.post("/api/v1/account/change-password")
+    @_require_user
+    def core_change_password():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        current = str(data.get("current_password", ""))
+        new_password = str(data.get("new_password", ""))
+        confirm = str(data.get("confirm_password", ""))
+        with _connect() as db:
+            row = db.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],)).fetchone()
+        if not row or not check_password_hash(row["password_hash"], current):
+            return _json_error("CURRENT_PASSWORD_INVALID", "Your current password is incorrect.", 403)
+        if len(new_password) < 10 or len(new_password) > 1024:
+            return _json_error("VALIDATION_ERROR", "New password must contain between 10 and 1024 characters.", 400)
+        if new_password != confirm:
+            return _json_error("PASSWORD_MISMATCH", "The new passwords do not match.", 400)
+        if check_password_hash(row["password_hash"], new_password):
+            return _json_error("PASSWORD_REUSED", "Choose a password different from your current password.", 400)
+        with _connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE users SET password_hash=?,session_version=session_version+1,updated_at=? WHERE id=?",
+                       (generate_password_hash(new_password, method="scrypt"), utc_now(), user["id"]))
+            db.execute("UPDATE mobile_refresh_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE user_id=?",
+                       (utc_now(), user["id"]))
+            db.execute("UPDATE mobile_access_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE user_id=?",
+                       (utc_now(), user["id"]))
+            db.commit()
+        _audit(user["id"], "auth.password_changed", "user", user["id"], "success")
+        session.clear()
+        return jsonify({"data": {"changed": True, "sessions_revoked": True, "reauthentication_required": True},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.get("/api/v1/account/export")
+    @_require_user
+    def core_account_export():
+        user = _current_user()
+        with _connect() as db:
+            profile = db.execute("SELECT phone,country,city,headline,professional_summary,years_experience FROM user_profiles WHERE user_id=?",
+                                 (user["id"],)).fetchone()
+            preferences = db.execute("SELECT desired_roles_json,work_modes_json,employment_types_json,preferred_locations_json,salary_min_ngn,salary_max_ngn FROM career_preferences WHERE user_id=?",
+                                     (user["id"],)).fetchone()
+            cvs = db.execute("SELECT id,title,content_text,document_status,created_at,updated_at FROM cv_documents WHERE user_id=?",
+                             (user["id"],)).fetchall()
+            applications = db.execute("""SELECT a.id,a.status,a.applied_at,j.title,j.location FROM applications a
+                                         JOIN jobs j ON j.id=a.job_id WHERE a.applicant_user_id=?""",
+                                      (user["id"],)).fetchall()
+            ledger = db.execute("SELECT delta,balance_after,entry_type,description,created_at FROM credit_ledger WHERE user_id=? ORDER BY created_at",
+                                (user["id"],)).fetchall()
+            notifications = db.execute("SELECT category,title,body,read_at,created_at FROM notifications WHERE user_id=?",
+                                       (user["id"],)).fetchall()
+        export = {"account": {"id": user["id"], "email": user["email"], "full_name": user["full_name"],
+                              "role": user["role"], "account_status": user["account_status"]},
+                  "profile": dict(profile) if profile else None,
+                  "preferences": dict(preferences) if preferences else None,
+                  "cv_documents": [dict(row) for row in cvs],
+                  "applications": [dict(row) for row in applications],
+                  "credit_ledger": [dict(row) for row in ledger],
+                  "notifications": [dict(row) for row in notifications],
+                  "generated_at": utc_now()}
+        _audit(user["id"], "privacy.account_exported", "user", user["id"], "success")
+        return jsonify({"data": export, "request_id": str(uuid.uuid4())})
 
     @app.get("/profile")
     @_require_user
@@ -1834,6 +1930,8 @@ def register_core_api(app):
         title = module_titles.get(module_key)
         if module_key == "profile":
             return redirect("/profile")
+        if module_key == "settings":
+            return redirect("/settings")
         if module_key == "wallet":
             return redirect("/wallet")
         if module_key == "ai-assistant":

@@ -1726,6 +1726,50 @@ def register_core_api(app):
                {"reference": reference, "credits": int(package["credits"])})
         return jsonify({"received": True, "credited": int(package["credits"])}), 200
 
+    @app.post("/api/v1/ai/quote")
+    @_require_user
+    def core_ai_quote():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        action_key = str(data.get("action", ""))
+        input_payload = data.get("input")
+        if action_key not in ACTION_BASE_COSTS:
+            return _json_error("UNKNOWN_ACTION", "This AI action is not supported.", 404)
+        if not isinstance(input_payload, dict):
+            return _json_error("VALIDATION_ERROR", "The input field must be an object.", 400)
+        model = "server-default"
+        prompt_version = "v1"
+        key = _cache_key(action_key, user["id"], input_payload, model, prompt_version)
+        input_hash = hashlib.sha256(json.dumps(input_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        # Cache is always checked before a price is quoted or any credit debit can occur.
+        with _connect() as db:
+            cached = db.execute("SELECT 1 FROM llm_cache WHERE cache_key=? AND (expires_at IS NULL OR expires_at>?)",
+                                (key, utc_now())).fetchone()
+            price = db.execute("SELECT base_cost,cache_hit_cost,active FROM credit_action_prices WHERE action_key=?",
+                               (action_key,)).fetchone()
+        if not price or not price["active"]:
+            return _json_error("ACTION_UNAVAILABLE", "This AI action is temporarily unavailable.", 503)
+        cache_hit = cached is not None
+        if cache_hit and price["cache_hit_cost"] is None:
+            return _json_error("CACHE_PRICE_NOT_CONFIGURED", "A discounted price has not been approved for this cached action.", 503)
+        cost = int(price["cache_hit_cost"] if cache_hit else price["base_cost"])
+        if int(user["credits"]) < cost:
+            return _json_error("INSUFFICIENT_CREDITS", "There are not enough credits for this action.",
+                               402, required=cost, available=int(user["credits"]))
+        quote_id = str(uuid.uuid4())
+        raw_token = secrets.token_urlsafe(32)
+        expires = datetime.fromtimestamp(time.time() + 120, timezone.utc).isoformat()
+        with _connect() as db:
+            db.execute("INSERT INTO ai_quotes(id,user_id,action_key,input_hash,cache_key,cache_hit,credits_cost,quote_token_hash,status,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (quote_id, user["id"], action_key, input_hash, key, int(cache_hit), cost,
+                        hashlib.sha256(raw_token.encode()).hexdigest(), "pending", expires, utc_now()))
+        return jsonify({"data": {"quote_id": quote_id, "quote_token": raw_token, "action": action_key,
+                                 "cache_hit": cache_hit, "credits_cost": cost,
+                                 "total_credits": int(user["credits"]),
+                                 "remaining_credits": int(user["credits"]) - cost,
+                                 "expires_at": expires, "expires_in": 120},
+                        "request_id": str(uuid.uuid4())})
+
     @app.post("/api/v1/ai/actions/<action_key>")
     @_require_user
     def core_ai_action(action_key):
@@ -1734,70 +1778,91 @@ def register_core_api(app):
             return _json_error("UNKNOWN_ACTION", "This AI action is not supported.", 404)
         data = request.get_json(silent=True) or {}
         input_payload = data.get("input")
+        quote_id = str(data.get("quote_id", ""))
+        quote_token = str(data.get("quote_token", ""))
         if not isinstance(input_payload, dict):
             return _json_error("VALIDATION_ERROR", "The input field must be an object.", 400)
+        if not quote_id or not quote_token:
+            return _json_error("CONFIRMATION_REQUIRED", "Request a credit quote and confirm it before running this action.", 428)
         model = "server-default"
         prompt_version = "v1"
         key = _cache_key(action_key, user["id"], input_payload, model, prompt_version)
-        request_id = str(uuid.uuid4())
-        # Required ordering: SQLite llm_cache is checked before any debit or LLM call.
+        input_hash = hashlib.sha256(json.dumps(input_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        # Recheck SQLite cache immediately before consuming the quote and debiting credits.
         with _connect() as db:
-            cached = db.execute(
-                """SELECT response_json FROM llm_cache
-                   WHERE cache_key=? AND (expires_at IS NULL OR expires_at>?)""",
-                (key, utc_now()),
-            ).fetchone()
-            price = db.execute(
-                "SELECT base_cost,cache_hit_cost,active FROM credit_action_prices WHERE action_key=?",
-                (action_key,),
-            ).fetchone()
+            cached = db.execute("SELECT response_json FROM llm_cache WHERE cache_key=? AND (expires_at IS NULL OR expires_at>?)",
+                                (key, utc_now())).fetchone()
+            price = db.execute("SELECT base_cost,cache_hit_cost,active FROM credit_action_prices WHERE action_key=?",
+                               (action_key,)).fetchone()
+            quote = db.execute("SELECT * FROM ai_quotes WHERE id=? AND user_id=?",
+                               (quote_id, user["id"])).fetchone()
         if not price or not price["active"]:
             return _json_error("ACTION_UNAVAILABLE", "This AI action is temporarily unavailable.", 503)
         cache_hit = cached is not None
         if cache_hit and price["cache_hit_cost"] is None:
-            return _json_error("CACHE_PRICE_NOT_CONFIGURED",
-                "A discounted price has not been approved for this cached action.", 503)
+            return _json_error("CACHE_PRICE_NOT_CONFIGURED", "A discounted price has not been approved for this cached action.", 503)
         cost = int(price["cache_hit_cost"] if cache_hit else price["base_cost"])
-        idem = request.headers.get("Idempotency-Key") or data.get("client_request_id") or request_id
-        try:
-            balance = _debit(user["id"], cost, action_key, request_id, str(idem))
-        except (LookupError, ValueError):
-            return _json_error("REQUEST_FAILED", "The action could not be processed.", 500)
-        if balance is None:
-            return _json_error("INSUFFICIENT_CREDITS", "There are not enough credits for this action.",
-                               402, required=cost, available=int(user["credits"]))
+        if not quote or quote["status"] != "pending" or quote["expires_at"] <= utc_now():
+            return _json_error("QUOTE_EXPIRED", "This credit quote has expired. Request a new quote.", 409)
+        supplied_hash = hashlib.sha256(quote_token.encode()).hexdigest()
+        if not hmac.compare_digest(supplied_hash, quote["quote_token_hash"]):
+            return _json_error("INVALID_QUOTE", "The credit confirmation is invalid.", 403)
+        if (quote["action_key"] != action_key or quote["input_hash"] != input_hash
+                or quote["cache_key"] != key or int(quote["cache_hit"]) != int(cache_hit)
+                or int(quote["credits_cost"]) != cost):
+            return _json_error("QUOTE_STALE", "The action or cached result changed. Review a new credit quote before continuing.", 409)
+        request_id = str(uuid.uuid4())
+        idem = "ai-quote:" + quote_id
         with _connect() as db:
-            db.execute(
-                """INSERT INTO ai_requests
-                   (id,user_id,action_key,cache_key,cache_hit,credits_charged,status,provider,model,created_at,completed_at)
-                   VALUES(?,?,?,?,?,?,?, ?,?,?,?)""",
-                (request_id, user["id"], action_key, key, int(cache_hit), cost,
-                 "completed" if cache_hit else "pending", "sqlite-cache" if cache_hit else None,
-                 model, utc_now(), utc_now() if cache_hit else None),
-            )
+            db.execute("BEGIN IMMEDIATE")
+            current_quote = db.execute("SELECT status,expires_at,quote_token_hash FROM ai_quotes WHERE id=? AND user_id=?",
+                                       (quote_id, user["id"])).fetchone()
+            if not current_quote or current_quote["status"] != "pending" or current_quote["expires_at"] <= utc_now():
+                db.rollback()
+                return _json_error("QUOTE_ALREADY_USED", "This confirmation has already been used. Request a new quote.", 409)
+            if not hmac.compare_digest(hashlib.sha256(quote_token.encode()).hexdigest(), current_quote["quote_token_hash"]):
+                db.rollback()
+                return _json_error("INVALID_QUOTE", "The credit confirmation is invalid.", 403)
+            balance_row = db.execute("SELECT credits FROM users WHERE id=?", (user["id"],)).fetchone()
+            balance = int(balance_row["credits"])
+            if balance < cost:
+                db.rollback()
+                return _json_error("INSUFFICIENT_CREDITS", "There are not enough credits for this action.",
+                                   402, required=cost, available=balance)
+            new_balance = balance - cost
+            db.execute("UPDATE users SET credits=?,updated_at=? WHERE id=?", (new_balance, utc_now(), user["id"]))
+            db.execute("""INSERT INTO credit_ledger(id,user_id,delta,balance_after,entry_type,reference_type,reference_id,
+                          idempotency_key,description,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                       (str(uuid.uuid4()), user["id"], -cost, new_balance, "usage", "ai_request", request_id,
+                        idem, action_key + " AI action", utc_now()))
+            db.execute("UPDATE ai_quotes SET status='consumed',consumed_at=? WHERE id=?", (utc_now(), quote_id))
+            db.execute("""INSERT INTO ai_requests
+                          (id,user_id,action_key,cache_key,cache_hit,credits_charged,status,provider,model,created_at,completed_at)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                       (request_id, user["id"], action_key, key, int(cache_hit), cost,
+                        "completed" if cache_hit else "pending", "sqlite-cache" if cache_hit else None,
+                        model, utc_now(), utc_now() if cache_hit else None))
             if cache_hit:
                 db.execute("UPDATE llm_cache SET hit_count=hit_count+1,last_hit_at=? WHERE cache_key=?",
                            (utc_now(), key))
+            db.commit()
         if cache_hit:
             return jsonify({"data": {"request_id": request_id, "cache": {"hit": True},
-                "credits": {"charged": cost, "balance": balance},
+                "credits": {"charged": cost, "balance": new_balance},
                 "result": json.loads(cached["response_json"])}, "request_id": request_id})
         try:
             generated = _llm_generate(action_key, input_payload, model)
             response_json = json.dumps(generated, ensure_ascii=False, separators=(",", ":"))
             with _connect() as db:
-                db.execute(
-                    """INSERT OR REPLACE INTO llm_cache
-                       (cache_key,action_key,provider,model,prompt_version,input_hash,response_json,created_at,expires_at,hit_count)
-                       VALUES(?,?,?,?,?,?,?,?,?,0)""",
-                    (key, action_key, "configured-adapter", model, prompt_version,
-                     hashlib.sha256(json.dumps(input_payload, sort_keys=True).encode()).hexdigest(),
-                     response_json, utc_now(), None),
-                )
+                db.execute("""INSERT OR REPLACE INTO llm_cache
+                              (cache_key,action_key,provider,model,prompt_version,input_hash,response_json,created_at,expires_at,hit_count)
+                              VALUES(?,?,?,?,?,?,?,?,?,0)""",
+                           (key, action_key, "configured-adapter", model, prompt_version, input_hash,
+                            response_json, utc_now(), None))
                 db.execute("UPDATE ai_requests SET status=?,provider=?,completed_at=? WHERE id=?",
                            ("completed", "configured-adapter", utc_now(), request_id))
             return jsonify({"data": {"request_id": request_id, "cache": {"hit": False},
-                "credits": {"charged": cost, "balance": balance}, "result": generated},
+                "credits": {"charged": cost, "balance": new_balance}, "result": generated},
                 "request_id": request_id})
         except Exception:
             _refund(user["id"], cost, request_id, "AI provider failed; automatic refund")

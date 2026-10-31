@@ -392,6 +392,14 @@ def _init_db() -> None:
         pipeline_columns = {row["name"] for row in db.execute("PRAGMA table_info(recruiter_pipeline_items)").fetchall()}
         if "candidate_consent_at" not in pipeline_columns:
             db.execute("ALTER TABLE recruiter_pipeline_items ADD COLUMN candidate_consent_at TEXT")
+        db.execute("""CREATE TABLE IF NOT EXISTS core_migrations (
+            migration_key TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )""")
+        package_migration = "2026-10-31-approved-credit-package-endpoints"
+        migration_applied = db.execute(
+            "SELECT 1 FROM core_migrations WHERE migration_key=?", (package_migration,)
+        ).fetchone()
         for package in CONFIRMED_PACKAGE_ENDPOINTS:
             db.execute(
                 """INSERT OR IGNORE INTO credit_packages
@@ -400,6 +408,16 @@ def _init_db() -> None:
                 (str(uuid.uuid4()), package["price_kobo"], package["credits"],
                  0, package["active"], package["price_kobo"], utc_now()),
             )
+            if not migration_applied:
+                db.execute(
+                    """UPDATE credit_packages SET credits=?,bonus_credits=0,active=?,
+                       display_order=? WHERE price_kobo=?""",
+                    (package["credits"], package["active"], package["price_kobo"],
+                     package["price_kobo"]),
+                )
+        if not migration_applied:
+            db.execute("INSERT INTO core_migrations(migration_key,applied_at) VALUES(?,?)",
+                       (package_migration, utc_now()))
         for action, cost in ACTION_BASE_COSTS.items():
             db.execute(
                 """INSERT OR IGNORE INTO credit_action_prices

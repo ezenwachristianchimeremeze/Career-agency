@@ -310,6 +310,22 @@ def _cache_key(action: str, user_id: str, payload: dict, model: str, prompt_vers
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _llm_generate(action: str, payload: dict, model: str):
+    endpoint = os.environ.get("CAREER_AGENCY_LLM_ENDPOINT", "")
+    api_key = os.environ.get("CAREER_AGENCY_LLM_API_KEY", "")
+    if not endpoint:
+        raise RuntimeError("AI provider adapter is not configured")
+    body = json.dumps({"action": action, "model": model, "input": payload}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    req = Request(endpoint, data=body, headers=headers, method="POST")
+    with urlopen(req, timeout=60) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if not isinstance(result, dict):
+        raise RuntimeError("AI provider returned an invalid response")
+    return result
+
 def _paystack_request(path: str, payload=None):
     secret = os.environ.get("PAYSTACK_SECRET_KEY", "")
     if not secret:
@@ -652,14 +668,30 @@ location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=fals
             return jsonify({"data": {"request_id": request_id, "cache": {"hit": True},
                 "credits": {"charged": cost, "balance": balance},
                 "result": json.loads(cached["response_json"])}, "request_id": request_id})
-        # Provider integration is intentionally fail-closed until a provider adapter is configured.
-        # A paid miss is refunded exactly once rather than returning a fake/generated result.
-        _refund(user["id"], cost, request_id, "AI provider is not configured; automatic refund")
-        with _connect() as db:
-            db.execute("UPDATE ai_requests SET status='refunded',error_code='AI_PROVIDER_NOT_CONFIGURED',completed_at=? WHERE id=?",
-                       (utc_now(), request_id))
-        return _json_error("AI_PROVIDER_NOT_CONFIGURED",
-            "The AI provider adapter has not been configured yet. Your credits have been refunded.", 503)
+        try:
+            generated = _llm_generate(action_key, input_payload, model)
+            response_json = json.dumps(generated, ensure_ascii=False, separators=(",", ":"))
+            with _connect() as db:
+                db.execute(
+                    """INSERT OR REPLACE INTO llm_cache
+                       (cache_key,action_key,provider,model,prompt_version,input_hash,response_json,created_at,expires_at,hit_count)
+                       VALUES(?,?,?,?,?,?,?,?,?,0)""",
+                    (key, action_key, "configured-adapter", model, prompt_version,
+                     hashlib.sha256(json.dumps(input_payload, sort_keys=True).encode()).hexdigest(),
+                     response_json, utc_now(), None),
+                )
+                db.execute("UPDATE ai_requests SET status=?,provider=?,completed_at=? WHERE id=?",
+                           ("completed", "configured-adapter", utc_now(), request_id))
+            return jsonify({"data": {"request_id": request_id, "cache": {"hit": False},
+                "credits": {"charged": cost, "balance": balance}, "result": generated},
+                "request_id": request_id})
+        except Exception:
+            _refund(user["id"], cost, request_id, "AI provider failed; automatic refund")
+            with _connect() as db:
+                db.execute("UPDATE ai_requests SET status=?,error_code=?,completed_at=? WHERE id=?",
+                           ("refunded", "AI_PROVIDER_ERROR", utc_now(), request_id))
+            return _json_error("AI_PROVIDER_ERROR",
+                "The AI service is temporarily unavailable. Your credits have been refunded.", 502)
 
     @app.post("/api/v1/admin/credit-packages/<package_id>/activate")
     @_require_user

@@ -508,6 +508,160 @@ const d=await r.json();if(!r.ok)throw new Error(d.error?.message||'Unable to sig
 location.href='/';}catch(x){err.textContent=x.message;}finally{btn.disabled=false;btn.textContent='Sign in';}});
 </script></body></html>"""
 
+    @app.get("/register")
+    def core_register_screen():
+        content = """
+        <form id="auth-form">
+        <label>Full name</label><input name="full_name" autocomplete="name" maxlength="120" required>
+        <label>Email address</label><input name="email" type="email" autocomplete="email" required>
+        <label>Password</label><input name="password" type="password" minlength="10" autocomplete="new-password" required>
+        <label>Confirm password</label><input name="confirm_password" type="password" minlength="10" autocomplete="new-password" required>
+        <label>Account type</label><select name="role"><option value="job_seeker">Job seeker</option><option value="employer">Employer</option><option value="recruiter">Recruiter</option></select>
+        <label class="consent"><input type="checkbox" name="terms_accepted" required><span>I agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</span></label>
+        <button id="submit" type="submit">Create account</button><div id="error" role="alert" class="error"></div></form>
+        <div class="links"><a href="/auth/login">Already have an account? Sign in</a></div>"""
+        script = """
+        const f=document.getElementById("auth-form"),b=document.getElementById("submit"),e=document.getElementById("error");
+        f.addEventListener("submit",async ev=>{ev.preventDefault();const d=Object.fromEntries(new FormData(f));
+        if(d.password!==d.confirm_password){e.textContent="Your passwords do not match.";return;}
+        d.terms_accepted=f.elements.terms_accepted.checked;b.disabled=true;b.textContent="Creating account…";e.textContent="";
+        try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify(d)});
+        const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to create account.");location.href="/verify-email?email="+encodeURIComponent(d.email);
+        }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Create account";}});
+        """
+        return _auth_page("Create your account", "Build your next career move with clarity.", content, script)
+
+    @app.get("/forgot-password")
+    def core_forgot_screen():
+        content = """
+        <form id="auth-form"><label>Email address</label><input name="email" type="email" autocomplete="email" required>
+        <button id="submit" type="submit">Send reset link</button><div id="message" role="status" class="error"></div></form>
+        <div class="links"><a href="/auth/login">Back to sign in</a></div>"""
+        script = """
+        const f=document.getElementById("auth-form"),b=document.getElementById("submit"),m=document.getElementById("message");
+        f.addEventListener("submit",async ev=>{ev.preventDefault();b.disabled=true;b.textContent="Sending…";m.textContent="";
+        try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/forgot-password",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({email:f.elements.email.value})});
+        const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Please try again.");m.textContent=x.data.message;
+        }catch(x){m.textContent=x.message;}finally{b.disabled=false;b.textContent="Send reset link";}});
+        """
+        return _auth_page("Forgot your password?", "We will send a secure reset link if the account exists.", content, script)
+
+    @app.get("/reset-password")
+    def core_reset_screen():
+        content = """
+        <form id="auth-form"><input type="hidden" name="token" id="token">
+        <label>New password</label><input name="password" type="password" minlength="10" autocomplete="new-password" required>
+        <label>Confirm new password</label><input name="confirm_password" type="password" minlength="10" autocomplete="new-password" required>
+        <button id="submit" type="submit">Update password</button><div id="error" role="alert" class="error"></div></form>"""
+        script = """
+        const f=document.getElementById("auth-form"),b=document.getElementById("submit"),e=document.getElementById("error");
+        document.getElementById("token").value=new URLSearchParams(location.search).get("token")||"";
+        f.addEventListener("submit",async ev=>{ev.preventDefault();const d=Object.fromEntries(new FormData(f));if(d.password!==d.confirm_password){e.textContent="Your passwords do not match.";return;}
+        b.disabled=true;b.textContent="Updating…";e.textContent="";try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/reset-password",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify(d)});
+        const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Reset link is invalid or expired.");location.href="/auth/login?reset=success";
+        }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Update password";}});
+        """
+        return _auth_page("Choose a new password", "Use a strong password you have not used elsewhere.", content, script)
+
+    @app.get("/verify-email")
+    def core_verify_screen():
+        content = """
+        <p id="status" role="status">Open the verification link sent to your email address. If you need another link, request one below.</p>
+        <form id="auth-form"><label>Email address</label><input name="email" type="email" autocomplete="email" required>
+        <button id="submit" type="submit">Resend verification email</button><div id="message" class="error" role="status"></div></form>
+        <div class="links"><a href="/auth/login">Back to sign in</a></div>"""
+        script = """
+        const f=document.getElementById("auth-form"),b=document.getElementById("submit"),m=document.getElementById("message");
+        f.elements.email.value=new URLSearchParams(location.search).get("email")||"";
+        const token=new URLSearchParams(location.search).get("token");if(token){fetch("/api/v1/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token})}).then(async r=>{const x=await r.json();document.getElementById("status").textContent=r.ok?"Your email is verified. You can now sign in.":(x.error?.message||"This verification link is invalid or expired.");}).catch(()=>{});}
+        f.addEventListener("submit",async ev=>{ev.preventDefault();b.disabled=true;m.textContent="";try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/resend-verification",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({email:f.elements.email.value})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Please try again.");m.textContent=x.data.message;}catch(x){m.textContent=x.message;}finally{b.disabled=false;}});
+        """
+        return _auth_page("Verify your email", "One quick confirmation protects your Career Agency account.", content, script)
+
+    @app.get("/api/v1/auth/csrf")
+    def core_csrf_token():
+        token = session.get("csrf_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+        return jsonify({"data": {"csrf_token": token}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/auth/verify-email")
+    def core_verify_email():
+        data = request.get_json(silent=True) or {}
+        raw = str(data.get("token", "")).strip()
+        if not raw:
+            return _json_error("VALIDATION_ERROR", "Verification token is required.", 400)
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        with _connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM auth_tokens WHERE token_hash=? AND purpose=? AND consumed_at IS NULL AND expires_at>?",
+                             (digest, "email_verification", utc_now())).fetchone()
+            if not row:
+                db.rollback()
+                return _json_error("INVALID_TOKEN", "This verification link is invalid or expired.", 400)
+            db.execute("UPDATE auth_tokens SET consumed_at=? WHERE id=?", (utc_now(), row["id"]))
+            db.execute("UPDATE users SET email_verified_at=?,account_status=?,updated_at=? WHERE id=?",
+                       (utc_now(), "active", utc_now(), row["user_id"]))
+            db.commit()
+        _audit(row["user_id"], "auth.email_verified", "user", row["user_id"], "success")
+        return jsonify({"data": {"verified": True}, "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/auth/resend-verification")
+    def core_resend_verification():
+        data = request.get_json(silent=True) or {}
+        email = str(data.get("email", "")).strip().lower()
+        with _connect() as db:
+            user = db.execute("SELECT id,email_verified_at FROM users WHERE email=?", (email,)).fetchone()
+        if user and not user["email_verified_at"]:
+            token = _issue_auth_token(user["id"], "email_verification", 86400)
+            try:
+                _send_auth_email(email, "Verify your Career Agency account",
+                                 "Verify your email: " + _auth_email_link("/verify-email", token))
+            except Exception:
+                app.logger.exception("Verification email delivery failed")
+        return jsonify({"data": {"message": "If the account needs verification, a new email will be sent shortly."},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/auth/forgot-password")
+    def core_forgot_password():
+        data = request.get_json(silent=True) or {}
+        email = str(data.get("email", "")).strip().lower()
+        with _connect() as db:
+            user = db.execute("SELECT id FROM users WHERE email=? AND account_status='active'", (email,)).fetchone()
+        if user:
+            token = _issue_auth_token(user["id"], "password_reset", 3600)
+            try:
+                _send_auth_email(email, "Reset your Career Agency password",
+                                 "Reset your password: " + _auth_email_link("/reset-password", token))
+            except Exception:
+                app.logger.exception("Password reset email delivery failed")
+        return jsonify({"data": {"message": "If an account exists for that address, password reset instructions will be sent shortly."},
+                        "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/auth/reset-password")
+    def core_reset_password():
+        data = request.get_json(silent=True) or {}
+        raw = str(data.get("token", ""))
+        password = str(data.get("password", ""))
+        if len(password) < 10:
+            return _json_error("VALIDATION_ERROR", "Password must contain at least 10 characters.", 400)
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        with _connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM auth_tokens WHERE token_hash=? AND purpose=? AND consumed_at IS NULL AND expires_at>?",
+                             (digest, "password_reset", utc_now())).fetchone()
+            if not row:
+                db.rollback()
+                return _json_error("INVALID_TOKEN", "This reset link is invalid or expired.", 400)
+            db.execute("UPDATE auth_tokens SET consumed_at=? WHERE id=?", (utc_now(), row["id"]))
+            db.execute("UPDATE users SET password_hash=?,session_version=session_version+1,updated_at=? WHERE id=?",
+                       (generate_password_hash(password, method="scrypt"), utc_now(), row["user_id"]))
+            db.commit()
+        _audit(row["user_id"], "auth.password_reset", "user", row["user_id"], "success")
+        return jsonify({"data": {"password_updated": True, "sessions_revoked": True},
+                         "request_id": str(uuid.uuid4())})
+
     @app.post("/api/v1/auth/register")
     def core_register():
         data = request.get_json(silent=True) or {}

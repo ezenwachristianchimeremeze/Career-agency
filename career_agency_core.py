@@ -472,8 +472,8 @@ def register_core_api(app):
             if not expected or not supplied or not hmac.compare_digest(expected, supplied):
                 return _json_error("CSRF_VALIDATION_FAILED", "Refresh the page and try again.", 403)
         allowed = (
-            request.path == "/auth/login"
-            or request.path == "/auth/logout"
+            request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
+                             "/reset-password", "/verify-email", "/terms", "/privacy"}
             or request.path.startswith("/api/v1/auth/")
             or request.path == "/api/v1/payments/paystack/webhook"
             or request.path.startswith("/health")

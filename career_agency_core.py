@@ -6,6 +6,7 @@ a separate SQLite database during the migration so legacy tables are not altered
 from __future__ import annotations
 
 import hashlib
+import html
 import hmac
 import json
 import os
@@ -464,6 +465,12 @@ def register_core_api(app):
             return None
         if request.path == "/login":
             return redirect("/auth/login")
+        if request.path == "/":
+            return redirect("/workspace" if session.get("core_user_id") else "/auth/login")
+        if request.path == "/workspace":
+            if not session.get("core_user_id"):
+                return redirect("/auth/login")
+            return None
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path != "/api/v1/payments/paystack/webhook":
             expected = session.get("csrf_token", "")
             supplied = request.headers.get("X-CSRF-Token", "")
@@ -519,6 +526,54 @@ def register_core_api(app):
         }catch(x){err.textContent=x.message;}finally{btn.disabled=false;btn.textContent="Sign in";}});
         """
         return _auth_page("Welcome back.", "Your next opportunity starts with one focused step. Sign in to continue.", content, script)
+
+    @app.get("/workspace")
+    @_require_user
+    def core_workspace_home():
+        user = _current_user()
+        role_names = {"job_seeker": "Job Seeker", "employer": "Employer", "recruiter": "Recruiter", "admin": "Administrator"}
+        role = role_names.get(user["role"], "Career Agency")
+        safe_name = html.escape(user["full_name"])
+        content = """
+        <div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:22px 0">
+        <div style="color:#83b5ff;font-size:11px;letter-spacing:.12em;font-weight:800">ACCOUNT READY</div>
+        <p style="color:#dce8f8;line-height:1.7;margin:10px 0 0">Your account is verified and your sign-in is secure. The role-specific workspace is being connected to the new data services.</p>
+        </div>
+        <p style="color:#9aabc3;font-size:13px">Account type: """ + role + """</p>
+        <p style="color:#9aabc3;font-size:13px">Wallet balance: """ + str(user["credits"]) + """ credits</p>
+        <form id="logout-form"><button type="submit">Sign out</button></form>
+        <div id="message" class="error" role="status"></div>"""
+        script = """
+        document.getElementById("logout-form").addEventListener("submit",async ev=>{ev.preventDefault();const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());await fetch("/api/v1/auth/logout",{method:"POST",headers:{"X-CSRF-Token":c.data.csrf_token}});location.href="/auth/login";});
+        """
+        return _auth_page("Welcome, " + safe_name, "Your " + role + " account is ready.", content, script)
+
+    @app.get("/terms")
+    def core_terms_draft():
+        content = """
+        <p><strong>Draft for review — not approved legal terms.</strong></p>
+        <p>Career Agency provides career-management tools, job discovery, application organisation, document assistance and AI-supported features. Features may change as the service develops.</p>
+        <h3>Account responsibilities</h3><p>Keep account details accurate, protect your sign-in credentials and use only accounts you are authorised to access. Do not upload another person's private information without a lawful basis and permission.</p>
+        <h3>AI-assisted content</h3><p>AI outputs can be incomplete or inaccurate. Review generated CVs, applications, messages and recommendations before using them. Career Agency does not guarantee employment, interviews or ATS outcomes.</p>
+        <h3>Career Credits</h3><p>Credits are prepaid service units, not cash, deposits or withdrawable funds. Prices and action costs must be shown before purchase or use. Purchased credits are intended not to expire, subject to final approved policy. Refunds, chargebacks and payment disputes are handled under the final published policy and applicable law.</p>
+        <h3>Acceptable use and availability</h3><p>Do not abuse, disrupt, reverse engineer or attempt unauthorised access to the service. Availability may be affected by maintenance or third-party providers.</p>
+        <h3>Contact and changes</h3><p>The final terms must state the operator's legal identity, contact address, governing law, dispute process, limitation provisions and effective date before public launch.</p>
+        <div class="error">This page is a working draft and must receive Nigerian legal review before production use.</div>
+        <div class="links"><a href="/register">Back to account creation</a><a href="/privacy">Privacy draft</a></div>"""
+        return _auth_page("Terms of Service — Draft", "A plain-language outline of the rules for using Career Agency.", content)
+
+    @app.get("/privacy")
+    def core_privacy_draft():
+        content = """
+        <p><strong>Draft for review — not an approved privacy notice.</strong></p>
+        <h3>Information the service may process</h3><p>Account identity and contact details; CVs and career documents; job preferences and application records; employer and recruiter workspace information; support messages; device, security and usage events; wallet and payment references.</p>
+        <h3>Why information is used</h3><p>To create and secure accounts, provide career features, process credit purchases, respond to support requests, prevent abuse, maintain service reliability and improve product quality.</p>
+        <h3>AI and third-party services</h3><p>When a user chooses an AI feature, relevant input may be sent to the configured AI provider to produce the requested result. Payment processing is handled by Paystack. Final provider names, data locations, retention terms and transfer safeguards must be disclosed before launch.</p>
+        <h3>Security and retention</h3><p>Career Agency uses access controls and security measures appropriate to the system. The final policy must specify retention periods, deletion workflows, backups, subprocessors and incident notification procedures. Payment card details should remain with the payment provider and must not be stored in the Career Agency database.</p>
+        <h3>Your privacy choices</h3><p>The final notice must explain how users can access, correct, export or request deletion of personal information, withdraw consent where applicable and contact the privacy team.</p>
+        <div class="error">This draft requires review against the Nigeria Data Protection Act and applicable guidance before public launch.</div>
+        <div class="links"><a href="/register">Back to account creation</a><a href="/terms">Terms draft</a></div>"""
+        return _auth_page("Privacy Notice — Draft", "How account and career information is expected to be handled.", content)
 
     @app.get("/register")
     def core_register_screen():

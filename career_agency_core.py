@@ -716,7 +716,7 @@ def register_core_api(app):
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
                              "/onboarding", "/profile", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
-                             "/api/v1/dashboard"}
+                             "/api/v1/dashboard", "/api/v1/saved-jobs"}
             or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/workspace/jobs")
             or request.path.startswith("/workspace/applications")

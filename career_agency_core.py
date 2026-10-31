@@ -1793,7 +1793,7 @@ def register_core_api(app):
         <div class="role">""" + role_label + """ WORKSPACE</div><nav class="nav">""" + nav_html + """</nav>
         <div class="aside-bottom"><a class="nav-link" href="/workspace/modules/profile">My profile</a><a class="nav-link" href="/workspace/modules/settings">Settings</a><a class="nav-link" href="/auth/logout">Sign out</a></div></aside>
         <main><div class="top"><div><div class="eyebrow">CAREER AGENCY / OVERVIEW</div><h1>Welcome back, """ + safe_name + """</h1><div class="muted">Here is your workspace at a glance.</div></div>
-        <a class="wallet" href="/workspace/modules/wallet"><small>CAREER CREDITS</small><strong id="credits">""" + str(user["credits"]) + """</strong></a></div>
+        <div style="display:flex;gap:10px;align-items:center"><a href="/notifications" style="color:#a9c8ff;text-decoration:none;font-size:12px">Notifications <span id="unread"></span></a><a class="wallet" href="/workspace/modules/wallet"><small>CAREER CREDITS</small><strong id="credits">""" + str(user["credits"]) + """</strong></a></div></div>
         <div class="grid" id="stats"><div class="stat"><span>Loading your overview</span><strong>—</strong></div></div>
         <section class="section"><h2>Quick actions</h2><div class="actions">
         <a class="action" href="/workspace/modules/jobs"><b>Explore opportunities</b><span>Find roles and manage opportunities relevant to your goals.</span></a>
@@ -1809,7 +1809,7 @@ def register_core_api(app):
         employer:[["active_jobs","Active jobs"],["total_jobs","Total jobs"],["applicants","Applicants"],["upcoming_interviews","Upcoming interviews"]],
         recruiter:[["pipeline_candidates","Pipeline candidates"],["unread_notifications","Unread notifications"]],
         admin:[["users","Users"],["jobs","Jobs"],["applications","Applications"],["pending_employers","Pending employers"]]};
-        fetch("/api/v1/dashboard").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not load dashboard.");const d=x.data;document.getElementById("credits").textContent=d.credits.toLocaleString();
+        fetch("/api/v1/dashboard").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not load dashboard.");const d=x.data;document.getElementById("credits").textContent=d.credits.toLocaleString();document.getElementById("unread").textContent=d.metrics.unread_notifications?"("+d.metrics.unread_notifications+")":"";
         const items=labels[role]||[];document.getElementById("stats").innerHTML=items.map(([k,label])=>'<div class="stat"><span>'+label+'</span><strong>'+Number(d.metrics[k]||0).toLocaleString()+'</strong></div>').join("");
         }).catch(e=>{document.getElementById("dashboard-error").textContent=e.message;document.getElementById("stats").innerHTML='<div class="empty">Dashboard data is temporarily unavailable. Refresh to try again.</div>';});
         </script></body></html>"""

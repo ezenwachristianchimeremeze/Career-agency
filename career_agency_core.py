@@ -491,9 +491,12 @@ def register_core_api(app):
                 return _json_error("CSRF_VALIDATION_FAILED", "Refresh the page and try again.", 403)
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
-                             "/reset-password", "/verify-email", "/terms", "/privacy"}
+                             "/reset-password", "/verify-email", "/terms", "/privacy",
+                             "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages"}
             or request.path.startswith("/api/v1/auth/")
-            or request.path == "/api/v1/payments/paystack/webhook"
+            or request.path.startswith("/api/v1/ai/actions/")
+            or request.path.startswith("/api/v1/payments/")
+            or request.path.startswith("/api/v1/admin/credit-packages/")
             or request.path.startswith("/health")
         )
         if allowed:

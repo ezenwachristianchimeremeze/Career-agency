@@ -1499,7 +1499,8 @@ def register_core_api(app):
         if len(cover) > 5000:
             return _json_error("VALIDATION_ERROR", "Cover letter must not exceed 5000 characters.", 400)
         with _connect() as db:
-            if not db.execute("SELECT 1 FROM jobs WHERE id=? AND status='published'", (job_id,)).fetchone():
+            job = db.execute("SELECT id,employer_user_id,title FROM jobs WHERE id=? AND status='published'", (job_id,)).fetchone()
+            if not job:
                 return _json_error("NOT_FOUND", "This job is not available for applications.", 404)
             if cv_id and not db.execute("SELECT 1 FROM cv_documents WHERE id=? AND user_id=?", (cv_id, user["id"])).fetchone():
                 return _json_error("INVALID_CV", "Choose a CV from your own document library.", 400)
@@ -1509,6 +1510,9 @@ def register_core_api(app):
             db.execute("""INSERT INTO applications(id,job_id,applicant_user_id,cv_document_id,cover_letter,status,applied_at,updated_at)
                           VALUES(?,?,?,?,?,'submitted',?,?)""",
                        (application_id, job_id, user["id"], cv_id, cover or None, now, now))
+        _create_notification(job["employer_user_id"], "application", "New job application",
+                             user["full_name"] + " applied for " + job["title"],
+                             "/workspace/applications")
         _audit(user["id"], "job.application_submitted", "application", application_id, "success")
         return jsonify({"data": {"application_id": application_id, "status": "submitted"},
                         "request_id": str(uuid.uuid4())}), 201
@@ -1550,11 +1554,14 @@ def register_core_api(app):
         if status not in {"reviewing", "shortlisted", "interview", "rejected", "offer"}:
             return _json_error("VALIDATION_ERROR", "Choose a valid application status.", 400)
         with _connect() as db:
-            row = db.execute("SELECT a.id,j.employer_user_id FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+            row = db.execute("SELECT a.id,a.applicant_user_id,j.employer_user_id,j.title FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
                              (application_id,)).fetchone()
             if not row or (user["role"] != "admin" and row["employer_user_id"] != user["id"]):
                 return _json_error("NOT_FOUND", "Application not found.", 404)
             db.execute("UPDATE applications SET status=?,updated_at=? WHERE id=?", (status, utc_now(), application_id))
+        _create_notification(row["applicant_user_id"], "application", "Application status updated",
+                             "Your application for " + row["title"] + " is now " + status.replace("_", " ") + ".",
+                             "/workspace/applications")
         _audit(user["id"], "application.status_updated", "application", application_id, "success", {"status": status})
         return jsonify({"data": {"updated": True, "status": status}, "request_id": str(uuid.uuid4())})
 
@@ -1565,13 +1572,17 @@ def register_core_api(app):
         if user["role"] != "job_seeker":
             return _json_error("FORBIDDEN", "Only the applicant can withdraw an application.", 403)
         with _connect() as db:
-            row = db.execute("SELECT id,status FROM applications WHERE id=? AND applicant_user_id=?",
+            row = db.execute("""SELECT a.id,a.status,j.employer_user_id,j.title FROM applications a
+                                JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.applicant_user_id=?""",
                              (application_id, user["id"])).fetchone()
             if not row:
                 return _json_error("NOT_FOUND", "Application not found.", 404)
             if row["status"] in {"rejected", "offer", "withdrawn"}:
                 return _json_error("INVALID_TRANSITION", "This application can no longer be withdrawn.", 409)
             db.execute("UPDATE applications SET status='withdrawn',updated_at=? WHERE id=?", (utc_now(), application_id))
+        _create_notification(row["employer_user_id"], "application", "Application withdrawn",
+                             "An applicant withdrew their application for " + row["title"] + ".",
+                             "/workspace/applications")
         return jsonify({"data": {"withdrawn": True}, "request_id": str(uuid.uuid4())})
 
     @app.get("/api/v1/dashboard")

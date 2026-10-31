@@ -460,8 +460,6 @@ def register_core_api(app):
     @app.before_request
     def career_agency_auth_first():
         # Legacy routes are isolated until their ownership checks are migrated.
-        if app.config.get("TESTING"):
-            return None
         if request.endpoint == "static" or request.path.startswith("/static/"):
             return None
         if request.path == "/login":

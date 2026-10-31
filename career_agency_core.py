@@ -721,6 +721,7 @@ def register_core_api(app):
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")
+            or request.path == "/api/v1/ai/quote"
             or request.path.startswith("/api/v1/ai/actions/")
             or request.path.startswith("/api/v1/payments/")
             or request.path.startswith("/api/v1/admin/credit-packages/")

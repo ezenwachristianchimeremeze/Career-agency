@@ -18,7 +18,8 @@ from functools import wraps
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from flask import jsonify, redirect, request, session, url_for
+from flask import current_app, jsonify, redirect, request, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
 ACTION_BASE_COSTS = {
@@ -77,6 +78,19 @@ def _init_db() -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            family_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            revoked_at TEXT,
+            replaced_by_id TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mobile_refresh_family
+            ON mobile_refresh_tokens(family_id,user_id);
         CREATE TABLE IF NOT EXISTS auth_tokens (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -277,6 +291,20 @@ def _json_error(code: str, message: str, status: int, **details):
 
 def _current_user(db=None):
     user_id = session.get("core_user_id")
+    expected_version = session.get("core_session_version")
+    bearer = False
+    if not user_id:
+        authorization = request.headers.get("Authorization", "")
+        if authorization.startswith("Bearer "):
+            try:
+                payload = URLSafeTimedSerializer(current_app.secret_key, salt="career-agency-mobile-access").loads(
+                    authorization[7:].strip(), max_age=900
+                )
+                user_id = payload.get("sub")
+                expected_version = payload.get("sv")
+                bearer = True
+            except (BadSignature, SignatureExpired, TypeError, ValueError):
+                return None
     if not user_id:
         return None
     own = db or _connect()
@@ -285,8 +313,9 @@ def _current_user(db=None):
             "SELECT id,email,full_name,role,account_status,credits,session_version,onboarding_completed_at FROM users WHERE id=?",
             (user_id,),
         ).fetchone()
-        if row is None or int(row["session_version"]) != int(session.get("core_session_version", 0)):
-            session.clear()
+        if row is None or expected_version is None or int(row["session_version"]) != int(expected_version):
+            if not bearer:
+                session.clear()
             return None
         return row
     finally:

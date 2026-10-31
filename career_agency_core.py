@@ -6,7 +6,6 @@ a separate SQLite database during the migration so legacy tables are not altered
 from __future__ import annotations
 
 import hashlib
-import html
 import hmac
 import json
 import os
@@ -549,7 +548,7 @@ def register_core_api(app):
         user = _current_user()
         role_names = {"job_seeker": "Job Seeker", "employer": "Employer", "recruiter": "Recruiter", "admin": "Administrator"}
         role = role_names.get(user["role"], "Career Agency")
-        safe_name = html.escape(user["full_name"])
+        safe_name = user["full_name"]
         content = """
         <div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:22px 0">
         <div style="color:#83b5ff;font-size:11px;letter-spacing:.12em;font-weight:800">ACCOUNT READY</div>

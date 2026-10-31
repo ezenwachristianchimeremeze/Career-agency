@@ -217,3 +217,15 @@ Admin credit adjustment requires a reason, step-up authentication and audit reco
 - Audit all admin, payment, credit and permission mutations.
 - Use request IDs, structured logs, redaction and rate limiting.
 - Never trust browser redirect parameters, user IDs, action costs, credit quantities or roles.
+
+
+## 9. Implemented onboarding API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | /api/v1/onboarding | Read authenticated onboarding state |
+| PUT | /api/v1/onboarding/profile | Save profile and role-specific employer/recruiter details |
+| PUT | /api/v1/onboarding/preferences | Save validated career preference lists |
+| POST | /api/v1/onboarding/complete | Validate required fields and complete setup |
+
+The first authenticated route is /onboarding. Incomplete accounts are redirected there from the workspace. The workspace is accessible only after onboarding completion. Job seekers provide country and career preferences; employers provide organisation details; recruiters provide agency details. Role identity always comes from the server session.

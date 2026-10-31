@@ -223,10 +223,14 @@ def _current_user(db=None):
         return None
     own = db or _connect()
     try:
-        return own.execute(
-            "SELECT id,email,full_name,role,account_status,credits FROM users WHERE id=?",
+        row = own.execute(
+            "SELECT id,email,full_name,role,account_status,credits,session_version FROM users WHERE id=?",
             (user_id,),
         ).fetchone()
+        if row is None or int(row["session_version"]) != int(session.get("core_session_version", 0)):
+            session.clear()
+            return None
+        return row
     finally:
         if db is None:
             own.close()
@@ -360,6 +364,28 @@ def _paystack_request(path: str, payload=None):
             return json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError) as exc:
         raise RuntimeError("Paystack request failed") from exc
+
+
+def _rate_limit(bucket_key: str, limit: int, window_seconds: int) -> bool:
+    now = int(time.time())
+    with _connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT attempts,window_started_at,blocked_until FROM auth_rate_limits WHERE bucket_key=?",
+                         (bucket_key,)).fetchone()
+        if row and row["blocked_until"] and int(row["blocked_until"]) > now:
+            db.rollback()
+            return False
+        if not row or now - int(row["window_started_at"]) >= window_seconds:
+            db.execute("INSERT OR REPLACE INTO auth_rate_limits(bucket_key,attempts,window_started_at,blocked_until) VALUES(?,?,?,NULL)",
+                       (bucket_key, 1, now))
+            db.commit()
+            return True
+        attempts = int(row["attempts"]) + 1
+        blocked = now + window_seconds if attempts > limit else None
+        db.execute("UPDATE auth_rate_limits SET attempts=?,blocked_until=? WHERE bucket_key=?",
+                   (attempts, blocked, bucket_key))
+        db.commit()
+        return blocked is None
 
 
 def _issue_auth_token(user_id: str, purpose: str, ttl_seconds: int) -> str:
@@ -561,7 +587,7 @@ def register_core_api(app):
         script = """
         const f=document.getElementById("auth-form"),b=document.getElementById("submit"),m=document.getElementById("message");
         f.elements.email.value=new URLSearchParams(location.search).get("email")||"";
-        const token=new URLSearchParams(location.search).get("token");if(token){fetch("/api/v1/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token})}).then(async r=>{const x=await r.json();document.getElementById("status").textContent=r.ok?"Your email is verified. You can now sign in.":(x.error?.message||"This verification link is invalid or expired.");}).catch(()=>{});}
+        const token=new URLSearchParams(location.search).get("token");if(token){fetch("/api/v1/auth/csrf").then(x=>x.json()).then(c=>fetch("/api/v1/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({token})})).then(async r=>{const x=await r.json();document.getElementById("status").textContent=r.ok?"Your email is verified. You can now sign in.":(x.error?.message||"This verification link is invalid or expired.");}).catch(()=>{});}
         f.addEventListener("submit",async ev=>{ev.preventDefault();b.disabled=true;m.textContent="";try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/resend-verification",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({email:f.elements.email.value})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Please try again.");m.textContent=x.data.message;}catch(x){m.textContent=x.message;}finally{b.disabled=false;}});
         """
         return _auth_page("Verify your email", "One quick confirmation protects your Career Agency account.", content, script)
@@ -701,6 +727,8 @@ def register_core_api(app):
         password = str(data.get("password", ""))
         with _connect() as db:
             user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if not _rate_limit("login:" + hashlib.sha256(((request.remote_addr or "unknown") + ":" + email).encode()).hexdigest(), 8, 900):
+            return _json_error("RATE_LIMITED", "Too many sign-in attempts. Wait before trying again.", 429)
         if not user or not check_password_hash(user["password_hash"], password):
             return _json_error("INVALID_CREDENTIALS", "Email or password is incorrect.", 401)
         if user["account_status"] == "pending_verification" or not user["email_verified_at"]:
@@ -710,6 +738,7 @@ def register_core_api(app):
         session.clear()
         session["core_user_id"] = user["id"]
         session["core_role"] = user["role"]
+        session["core_session_version"] = int(user["session_version"])
         _audit(user["id"], "auth.login", "user", user["id"], "success")
         return jsonify({"data": {"user": {"id": user["id"], "email": user["email"],
             "full_name": user["full_name"], "role": user["role"]},

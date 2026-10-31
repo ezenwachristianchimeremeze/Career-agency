@@ -171,6 +171,19 @@ def _init_db() -> None:
             updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_cv_user_updated ON cv_documents(user_id,updated_at DESC);
+        CREATE TABLE IF NOT EXISTS cover_letters (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            company_name TEXT,
+            job_title TEXT,
+            content_text TEXT NOT NULL DEFAULT '',
+            document_status TEXT NOT NULL DEFAULT 'draft',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cover_letters_user_updated
+            ON cover_letters(user_id,updated_at DESC);
         CREATE TABLE IF NOT EXISTS interviews (
             id TEXT PRIMARY KEY,
             application_id TEXT NOT NULL REFERENCES applications(id),
@@ -744,6 +757,8 @@ def register_core_api(app):
             or request.path.startswith("/api/v1/notifications/")
             or request.path == "/api/v1/account/export"
             or request.path == "/api/v1/account/change-password"
+            or request.path == "/api/v1/cover-letters"
+            or request.path.startswith("/api/v1/cover-letters/")
             or request.path == "/api/v1/cvs"
             or request.path.startswith("/api/v1/cvs/")
             or request.path == "/api/v1/cvs"
@@ -753,6 +768,7 @@ def register_core_api(app):
             or request.path.startswith("/workspace/applications")
             or request.path.startswith("/workspace/employer/jobs")
             or request.path.startswith("/workspace/cv-studio")
+            or request.path.startswith("/workspace/cover-letters")
             or request.path.startswith("/workspace/recruiter/pipeline")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
@@ -1046,6 +1062,33 @@ def register_core_api(app):
         form.addEventListener("submit",async e=>{e.preventDefault();const b=document.getElementById("create"),d=Object.fromEntries(new FormData(form));b.disabled=true;message.textContent="";try{const t=await csrf();const r=await fetch("/api/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save job.");message.textContent="Job saved as a draft. Organisation verification is required before publication.";form.reset();await load();}catch(x){message.textContent=x.message;}finally{b.disabled=false;}});load();
         """
         return _auth_page("Manage jobs", "Create drafts, review your job posts and publish after organisation verification.", content, script)
+
+    @app.get("/workspace/cover-letters")
+    @_require_user
+    def core_cover_letters_screen():
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return redirect("/workspace")
+        content = """
+        <div id="letters" style="display:grid;gap:9px;margin-bottom:18px"><div class="empty">Loading your letters…</div></div>
+        <form id="letter-form"><label>Document title</label><input name="title" maxlength="160" required placeholder="e.g. Application for Technical Writer">
+        <label>Company name</label><input name="company_name" maxlength="160" placeholder="Company">
+        <label>Role title</label><input name="job_title" maxlength="160" placeholder="Role you are applying for">
+        <label>Cover letter</label><textarea name="content_text" rows="13" maxlength="20000" placeholder="Write a truthful, role-specific introduction. Only include experience, skills and achievements you can support." required></textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button type="submit">Save letter</button><button id="new-letter" type="button" style="background:#25354e">New letter</button></div></form>
+        <button id="delete-letter" type="button" style="background:#57303a">Delete selected letter</button>
+        <div id="message" class="error" role="status"></div><div class="links"><a href="/workspace">Back to workspace</a><a href="/workspace/jobs">Discover jobs</a></div>"""
+        script = """
+        const root=document.getElementById("letters"),form=document.getElementById("letter-form"),msg=document.getElementById("message");let selected=null;
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        async function load(){const r=await fetch("/api/v1/cover-letters"),x=await r.json();root.innerHTML="";if(!r.ok){msg.textContent=x.error?.message||"Unable to load letters.";return;}if(!x.data.length){root.innerHTML='<div class="empty">No cover letters yet. Create one below.</div>';return;}x.data.forEach(d=>{const b=document.createElement("button");b.type="button";b.textContent=d.title+" · "+(d.company_name||"No company");b.style.cssText="margin:0;text-align:left;background:#14233b;border:1px solid #263852";b.addEventListener("click",()=>open(d.id));root.append(b);});}
+        async function open(id){const r=await fetch("/api/v1/cover-letters/"+encodeURIComponent(id)),x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Unable to open letter.";return;}selected=id;for(const k of ["title","company_name","job_title","content_text"])form.elements[k].value=x.data[k]||"";msg.textContent="Cover letter loaded.";}
+        form.addEventListener("submit",async e=>{e.preventDefault();const b=form.querySelector('button[type="submit"]');b.disabled=true;try{const token=await csrf(),d=Object.fromEntries(new FormData(form)),url=selected?"/api/v1/cover-letters/"+encodeURIComponent(selected):"/api/v1/cover-letters";const r=await fetch(url,{method:selected?"PATCH":"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify(d)}),x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save letter.");selected=x.data.id||selected;msg.textContent="Cover letter saved.";load();}catch(x){msg.textContent=x.message;}finally{b.disabled=false;}});
+        document.getElementById("new-letter").addEventListener("click",()=>{selected=null;form.reset();msg.textContent="New cover letter ready.";});
+        document.getElementById("delete-letter").addEventListener("click",async()=>{if(!selected){msg.textContent="Select a saved letter first.";return;}const token=await csrf(),r=await fetch("/api/v1/cover-letters/"+encodeURIComponent(selected),{method:"DELETE",headers:{"X-CSRF-Token":token}}),x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Could not delete letter.";return;}selected=null;form.reset();msg.textContent="Cover letter deleted.";load();});
+        load();
+        """
+        return _auth_page("Cover Letter Studio", "Write and manage honest, role-specific cover letters. Manual editing and saving are free.", content, script)
 
     @app.get("/workspace/cv-studio")
     @_require_user
@@ -1493,6 +1536,81 @@ def register_core_api(app):
             db.execute("UPDATE jobs SET status='published',published_at=?,updated_at=? WHERE id=?", (now, now, job_id))
         _audit(user["id"], "job.published", "job", job_id, "success")
         return jsonify({"data": {"published": True}, "request_id": str(uuid.uuid4())})
+
+    @app.get("/api/v1/cover-letters")
+    @_require_user
+    def core_cover_letters_list():
+        user = _current_user()
+        with _connect() as db:
+            rows = db.execute("""SELECT id,title,company_name,job_title,document_status,created_at,updated_at
+                                 FROM cover_letters WHERE user_id=? ORDER BY updated_at DESC""",
+                              (user["id"],)).fetchall()
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
+    @app.post("/api/v1/cover-letters")
+    @_require_user
+    def core_cover_letters_create():
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        content = str(data.get("content_text", ""))
+        company = str(data.get("company_name", "")).strip()
+        job_title = str(data.get("job_title", "")).strip()
+        if not title or len(title) > 160 or len(content) > 20000 or len(company) > 160 or len(job_title) > 160:
+            return _json_error("VALIDATION_ERROR", "Check the title, company, role and document length.", 400)
+        doc_id, now = str(uuid.uuid4()), utc_now()
+        with _connect() as db:
+            db.execute("""INSERT INTO cover_letters
+                (id,user_id,title,company_name,job_title,content_text,document_status,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?)""",
+                (doc_id,user["id"],title,company,job_title,content,"draft",now,now))
+        _audit(user["id"], "cover_letter.created", "cover_letter", doc_id, "success")
+        return jsonify({"data":{"id":doc_id,"title":title,"document_status":"draft"},
+                        "request_id":str(uuid.uuid4())}), 201
+
+    @app.get("/api/v1/cover-letters/<document_id>")
+    @_require_user
+    def core_cover_letters_get(document_id):
+        user = _current_user()
+        with _connect() as db:
+            row = db.execute("""SELECT id,title,company_name,job_title,content_text,document_status,
+                                created_at,updated_at FROM cover_letters WHERE id=? AND user_id=?""",
+                             (document_id,user["id"])).fetchone()
+        if not row:
+            return _json_error("NOT_FOUND","Cover letter not found.",404)
+        return jsonify({"data":dict(row),"request_id":str(uuid.uuid4())})
+
+    @app.patch("/api/v1/cover-letters/<document_id>")
+    @_require_user
+    def core_cover_letters_update(document_id):
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        content = str(data.get("content_text", ""))
+        company = str(data.get("company_name", "")).strip()
+        job_title = str(data.get("job_title", "")).strip()
+        if not title or len(title) > 160 or len(content) > 20000 or len(company) > 160 or len(job_title) > 160:
+            return _json_error("VALIDATION_ERROR","Check the title, company, role and document length.",400)
+        with _connect() as db:
+            cur = db.execute("""UPDATE cover_letters SET title=?,company_name=?,job_title=?,
+                                content_text=?,updated_at=? WHERE id=? AND user_id=?""",
+                             (title,company,job_title,content,utc_now(),document_id,user["id"]))
+            if cur.rowcount != 1:
+                return _json_error("NOT_FOUND","Cover letter not found.",404)
+        _audit(user["id"],"cover_letter.updated","cover_letter",document_id,"success")
+        return jsonify({"data":{"saved":True},"request_id":str(uuid.uuid4())})
+
+    @app.delete("/api/v1/cover-letters/<document_id>")
+    @_require_user
+    def core_cover_letters_delete(document_id):
+        user = _current_user()
+        with _connect() as db:
+            cur = db.execute("DELETE FROM cover_letters WHERE id=? AND user_id=?",
+                             (document_id,user["id"]))
+            if cur.rowcount != 1:
+                return _json_error("NOT_FOUND","Cover letter not found.",404)
+        _audit(user["id"],"cover_letter.deleted","cover_letter",document_id,"success")
+        return jsonify({"data":{"deleted":True},"request_id":str(uuid.uuid4())})
 
     @app.get("/api/v1/cvs")
     @_require_user
@@ -1960,6 +2078,8 @@ def register_core_api(app):
             return redirect("/workspace/recruiter/pipeline")
         if module_key == "cv-studio":
             return redirect("/workspace/cv-studio")
+        if module_key == "cover-letters":
+            return redirect("/workspace/cover-letters")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

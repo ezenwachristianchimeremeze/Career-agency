@@ -392,6 +392,37 @@ def _auth_email_link(path: str, token: str) -> str:
     base = os.environ.get("CAREER_AGENCY_PUBLIC_URL", "http://127.0.0.1:5000").rstrip("/")
     return base + path + "?token=" + token
 
+def _auth_page(title: str, subtitle: str, content: str, script: str = "") -> str:
+    safe_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe_subtitle = subtitle.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080d19"><title>""" + safe_title + """ · Career Agency</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bg:#080d19;--panel:#101a2d;--line:#263650;--text:#f4f7fc;--muted:#9aabc3;--accent:#78a9ff;--accent2:#3979e8}
+*{box-sizing:border-box}body{margin:0;min-height:100svh;background:radial-gradient(ellipse at 50% -15%,#1c3157 0,transparent 48%),linear-gradient(145deg,#0a1222,#050811 70%);color:var(--text);font-family:"DM Sans",system-ui,sans-serif;display:grid;place-items:center;padding:24px}
+.panel{width:min(100%,470px);padding:clamp(24px,5vw,40px);border:1px solid var(--line);border-radius:24px;background:linear-gradient(160deg,#121f35f5,#0d1729f7);box-shadow:0 30px 90px #0009}
+.brand-row{display:flex;align-items:center;gap:13px;margin-bottom:30px}.brand-mark{width:48px;height:48px;flex:none}.brand-name{font:800 13px Manrope,sans-serif;letter-spacing:.16em;color:#dce9ff}.brand-caption{font-size:11px;letter-spacing:.08em;color:#7186a6;margin-top:3px}
+h1{font:800 clamp(25px,5vw,31px) Manrope,sans-serif;letter-spacing:-.04em;margin:0 0 9px}.subtitle{color:var(--muted);line-height:1.65;margin:0 0 26px;font-size:14px}
+label{display:block;font-size:13px;font-weight:600;color:#d1dced;margin:17px 0 8px}
+input,select{width:100%;min-height:49px;padding:13px 14px;border-radius:12px;border:1px solid #344560;background:#091222;color:#f7faff;font:500 15px "DM Sans",sans-serif;outline:none}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px #78a9ff24}
+button{width:100%;min-height:50px;margin-top:22px;border:0;border-radius:12px;background:linear-gradient(110deg,#4b8cf2,#2865d4);color:white;font-weight:800;font-size:15px;cursor:pointer}
+button:disabled{opacity:.55;cursor:wait}.links{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:21px;font-size:13px}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.error{min-height:20px;color:#ffaaa8;font-size:13px;line-height:1.5;margin-top:12px}
+.consent{display:flex;align-items:flex-start;gap:10px;font-weight:400;line-height:1.5}.consent input{width:17px;min-height:17px;margin:2px 0 0;flex:none}
+.footer{color:#647793;text-align:center;font-size:11px;margin-top:25px}.footer a{color:#93baff}
+@media(max-width:480px){body{padding:14px;place-items:center}.panel{border-radius:19px;padding:25px 21px}.brand-row{margin-bottom:25px}}
+</style></head><body><main class="panel">
+<div class="brand-row"><svg class="brand-mark" viewBox="0 0 48 48" role="img" aria-label="Career Agency logo"><defs><linearGradient id="ca" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9bc4ff"/><stop offset="1" stop-color="#3675e6"/></linearGradient></defs><rect x="1" y="1" width="46" height="46" rx="14" fill="#142b4d" stroke="#496b9c"/><path d="M30.5 15.5a13 13 0 1 0 0 17" fill="none" stroke="url(#ca)" stroke-width="5" stroke-linecap="round"/><path d="M25 24h13m-6.5-6.5L38 24l-6.5 6.5" fill="none" stroke="#eaf3ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<div><div class="brand-name">CAREER AGENCY</div><div class="brand-caption">CAREER GROWTH, WITH DIRECTION</div></div></div>
+<h1>""" + safe_title + """</h1><p class="subtitle">""" + safe_subtitle + """</p>""" + content + """
+<div class="footer">Secure account access · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></div>
+</main><script>""" + script + """</script></body></html>"""
+
+
 def register_core_api(app):
     """Register core routes and auth-first guard on the existing Flask app."""
     app.secret_key = os.environ.get("CAREER_AGENCY_SECRET_KEY", app.secret_key or secrets.token_hex(32))

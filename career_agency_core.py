@@ -657,8 +657,8 @@ def _auth_page(title: str, subtitle: str, content: str, script: str = "") -> str
 .brand-row{display:flex;align-items:center;gap:13px;margin-bottom:30px}.brand-mark{width:48px;height:48px;flex:none}.brand-name{font:800 13px Manrope,sans-serif;letter-spacing:.16em;color:#dce9ff}.brand-caption{font-size:11px;letter-spacing:.08em;color:#7186a6;margin-top:3px}
 h1{font:800 clamp(25px,5vw,31px) Manrope,sans-serif;letter-spacing:-.04em;margin:0 0 9px}.subtitle{color:var(--muted);line-height:1.65;margin:0 0 26px;font-size:14px}
 label{display:block;font-size:13px;font-weight:600;color:#d1dced;margin:17px 0 8px}
-input,select{width:100%;min-height:49px;padding:13px 14px;border-radius:12px;border:1px solid #344560;background:#091222;color:#f7faff;font:500 15px "DM Sans",sans-serif;outline:none}
-input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px #78a9ff24}
+input,select,textarea{width:100%;min-height:49px;padding:13px 14px;border-radius:12px;border:1px solid #344560;background:#091222;color:#f7faff;font:500 15px "DM Sans",sans-serif;outline:none}textarea{min-height:120px;resize:vertical;line-height:1.6}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px #78a9ff24}
 button{width:100%;min-height:50px;margin-top:22px;border:0;border-radius:12px;background:linear-gradient(110deg,#4b8cf2,#2865d4);color:white;font-weight:800;font-size:15px;cursor:pointer}
 button:disabled{opacity:.55;cursor:wait}.links{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:21px;font-size:13px}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.error{min-height:20px;color:#ffaaa8;font-size:13px;line-height:1.5;margin-top:12px}

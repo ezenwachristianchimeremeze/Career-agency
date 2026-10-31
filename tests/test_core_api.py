@@ -21,9 +21,17 @@ def client(tmp_path, monkeypatch):
     return app.test_client(), db_path, app
 
 
+
+def post_json(http, path, payload, headers=None):
+    csrf = http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
+    merged = {"X-CSRF-Token": csrf}
+    if headers:
+        merged.update(headers)
+    return http.post(path, json=payload, headers=merged)
+
 def create_and_login(client):
     http, db_path, app = client
-    created = http.post("/api/v1/auth/register", json={
+    created = post_json(http, "/api/v1/auth/register", {
         "full_name": "Test Candidate",
         "email": "candidate@example.com",
         "password": "long-test-password-123",
@@ -36,9 +44,9 @@ def create_and_login(client):
     email_body = app.config["email_outbox"][0][2]
     verify_url = email_body.split("Verify your email: ", 1)[1]
     token = parse_qs(urlparse(verify_url).query)["token"][0]
-    verified = http.post("/api/v1/auth/verify-email", json={"token": token})
+    verified = post_json(http, "/api/v1/auth/verify-email", {"token": token})
     assert verified.status_code == 200
-    logged_in = http.post("/api/v1/auth/login", json={
+    logged_in = post_json(http, "/api/v1/auth/login", {
         "email": "candidate@example.com",
         "password": "long-test-password-123",
     })
@@ -98,7 +106,7 @@ def test_cv_cache_hit_is_checked_before_debit_and_charges_discount(client):
              json.dumps({"analysis": "cached result"}), core.utc_now()),
         )
         db.commit()
-    response = http.post("/api/v1/ai/actions/cv", json=payload, headers={"Idempotency-Key": "cv-cache-hit-1"})
+    response = post_json(http, "/api/v1/ai/actions/cv", payload, headers={"Idempotency-Key": "cv-cache-hit-1"})
     assert response.status_code == 200
     body = response.get_json()["data"]
     assert body["cache"]["hit"] is True
@@ -125,7 +133,7 @@ def test_cache_hit_without_approved_discount_does_not_charge(client):
              json.dumps({"reply": "cached"}), core.utc_now()),
         )
         db.commit()
-    response = http.post("/api/v1/ai/actions/chat", json={"input": payload})
+    response = post_json(http, "/api/v1/ai/actions/chat", {"input": payload})
     assert response.status_code == 503
     with sqlite3.connect(db_path) as db:
         balance = db.execute("SELECT credits FROM users WHERE email=?", ("candidate@example.com",)).fetchone()[0]
@@ -137,11 +145,11 @@ def test_cache_hit_without_approved_discount_does_not_charge(client):
 def test_password_reset_invalidates_existing_sessions(client):
     http, db_path, app = create_and_login(client)
     old_cookie = http.get_cookie("session")
-    http.post("/api/v1/auth/forgot-password", json={"email": "candidate@example.com"})
+    post_json(http, "/api/v1/auth/forgot-password", {"email": "candidate@example.com"})
     body = app.config["email_outbox"][-1][2]
     reset_url = body.split("Reset your password: ", 1)[1]
     token = parse_qs(urlparse(reset_url).query)["token"][0]
-    reset = http.post("/api/v1/auth/reset-password", json={
+    reset = post_json(http, "/api/v1/auth/reset-password", {
         "token": token,
         "password": "new-long-password-456",
     })

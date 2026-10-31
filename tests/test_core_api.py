@@ -246,6 +246,41 @@ def test_wallet_screen_shows_balance_and_inactive_package_state(client):
     assert http.get("/workspace/modules/wallet").status_code == 302
 
 
+def test_cv_library_create_read_update_and_delete(client):
+    http, _, _ = create_and_login(client)
+    created = post_json(http, "/api/v1/cvs", {
+        "title": "Software Developer CV",
+        "content_text": "Professional Summary\nPython developer with API experience.",
+    })
+    assert created.status_code == 201
+    cv_id = created.get_json()["data"]["id"]
+    detail = http.get("/api/v1/cvs/" + cv_id)
+    assert detail.status_code == 200
+    assert detail.get_json()["data"]["title"] == "Software Developer CV"
+    updated = patch_json(http, "/api/v1/cvs/" + cv_id, {
+        "title": "Backend Developer CV",
+        "content_text": "Professional Summary\nBackend developer focused on secure APIs.",
+    })
+    assert updated.status_code == 200
+    assert http.get("/api/v1/cvs").get_json()["data"][0]["title"] == "Backend Developer CV"
+    deleted = http.delete("/api/v1/cvs/" + cv_id, headers={
+        "X-CSRF-Token": http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
+    })
+    assert deleted.status_code == 200
+    assert http.get("/api/v1/cvs/" + cv_id).status_code == 404
+
+
+def test_cv_studio_screen_uses_ai_credit_confirmation(client):
+    http, _, _ = create_and_login(client)
+    put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria"})
+    post_json(http, "/api/v1/onboarding/complete", {})
+    page = http.get("/workspace/cv-studio")
+    assert page.status_code == 200
+    assert b"CV Studio" in page.data
+    assert b"USING CREDITS" in page.data
+    assert b"Confirm" in page.data
+
+
 def test_profile_get_and_patch_are_user_scoped(client):
     http, _, _ = create_and_login(client)
     put_json(http, "/api/v1/onboarding/profile", {"country": "Nigeria", "city": "Port Harcourt"})

@@ -700,7 +700,7 @@ def register_core_api(app):
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
-                             "/onboarding", "/profile", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
+                             "/onboarding", "/profile", "/wallet", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
                              "/api/v1/dashboard"}
             or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/api/v1/auth/")
@@ -797,6 +797,50 @@ def register_core_api(app):
         }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Save and continue";}});
         """
         return _auth_page("Let's set up your workspace", "A few details help Career Agency prepare the right tools for your account.", content, script)
+
+    @app.get("/wallet")
+    @_require_user
+    def core_wallet_screen():
+        content = """
+        <div style="padding:20px;border:1px solid #294266;border-radius:16px;background:#101e34;margin:18px 0">
+        <div style="font-size:11px;letter-spacing:.12em;color:#93baff">AVAILABLE CAREER CREDITS</div>
+        <div id="balance" style="font:800 34px Manrope;margin-top:8px">—</div>
+        <div style="color:#91a3bd;font-size:12px">Prepaid credits · NGN</div></div>
+        <h3>Buy Career Credits</h3><div id="packages" style="display:grid;gap:12px"><div class="error">Loading available packages…</div></div>
+        <h3 style="margin-top:28px">Transaction history</h3><div id="ledger" style="display:grid;gap:9px"><div class="error">Loading transactions…</div></div>
+        <div id="message" class="error" role="alert"></div>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const balance=document.getElementById("balance"),packages=document.getElementById("packages"),ledger=document.getElementById("ledger"),message=document.getElementById("message");
+        const money=kobo=>"₦"+(Number(kobo)/100).toLocaleString("en-NG",{maximumFractionDigits:0});
+        Promise.all([fetch("/api/v1/wallet").then(r=>r.json()),fetch("/api/v1/credit-packages").then(r=>r.json()),fetch("/api/v1/wallet/ledger").then(r=>r.json())]).then(([w,p,l])=>{
+        balance.textContent=Number(w.data.credits).toLocaleString("en-NG");
+        const items=p.data.packages||[];
+        packages.innerHTML=items.length?items.map(x=>'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px;border:1px solid #263852;border-radius:13px;background:#0d182a"><div><strong>'+Number(x.credits).toLocaleString()+' Credits</strong><div style="color:#91a3bd;font-size:12px;margin-top:4px">'+money(x.price_kobo)+'</div></div><button data-package="'+x.id+'" style="width:auto;padding:10px 16px;margin:0">Buy</button></div>').join(""):'<div class="empty">Credit packages are temporarily unavailable while the approved pricing catalogue is being finalised. No purchase can be made yet.</div>';
+        ledger.innerHTML=l.data.length?l.data.map(x=>'<div style="display:flex;justify-content:space-between;gap:10px;padding:13px;border:1px solid #21324d;border-radius:12px"><div><strong style="font-size:13px">'+x.description+'</strong><div style="color:#91a3bd;font-size:11px;margin-top:4px">'+new Date(x.created_at).toLocaleString()+'</div></div><div style="text-align:right"><strong>'+((x.delta>0?"+":"")+Number(x.delta).toLocaleString())+'</strong><div style="color:#91a3bd;font-size:10px">Balance '+Number(x.balance_after).toLocaleString()+'</div></div></div>').join(""):'<div class="empty">Your wallet transactions will appear here.</div>';
+        packages.querySelectorAll("[data-package]").forEach(btn=>btn.addEventListener("click",async()=>{btn.disabled=true;btn.textContent="Opening…";message.textContent="";
+        try{const c=await fetch("/api/v1/auth/csrf").then(r=>r.json());const r=await fetch("/api/v1/payments/paystack/initialize",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":c.data.csrf_token},body:JSON.stringify({package_id:btn.dataset.package})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not start payment.");location.href=x.data.authorization_url;
+        }catch(e){message.textContent=e.message;btn.disabled=false;btn.textContent="Buy";}}));
+        }).catch(e=>{message.textContent=e.message||"Wallet data is temporarily unavailable.";packages.innerHTML='<div class="empty">Please refresh to try again.</div>';});
+        """
+        return _auth_page("Career Credits wallet", "Manage your prepaid credits and review every transaction.", content, script)
+
+    @app.get("/payments/return")
+    @_require_user
+    def core_payment_return_screen():
+        content = """
+        <div id="payment-status" class="empty">Checking your payment status…</div>
+        <button id="check" type="button">Check payment status</button>
+        <div class="links"><a href="/wallet">Return to wallet</a></div>"""
+        script = """
+        const status=document.getElementById("payment-status"),button=document.getElementById("check"),reference=new URLSearchParams(location.search).get("reference");
+        async function check(){if(!reference){status.textContent="Payment reference is missing.";return;}button.disabled=true;
+        try{const r=await fetch("/api/v1/payments/"+encodeURIComponent(reference));const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to check payment.");
+        const p=x.data;if(p.status==="success"||p.status==="credited"){status.textContent="Payment confirmed. Your wallet will show the updated balance."; }else if(p.status==="pending"||p.status==="initialized"){status.textContent="Payment is still being confirmed. Credits are added only after Paystack's verified webhook."; }else{status.textContent="Payment status: "+p.status+". Contact support if you believe this is incorrect.";}
+        }catch(e){status.textContent=e.message;}finally{button.disabled=false;}}
+        button.addEventListener("click",check);check();
+        """
+        return _auth_page("Payment status", "Your payment is being checked securely.", content, script)
 
     @app.get("/profile")
     @_require_user
@@ -1117,6 +1161,8 @@ def register_core_api(app):
         title = module_titles.get(module_key)
         if module_key == "profile":
             return redirect("/profile")
+        if module_key == "wallet":
+            return redirect("/wallet")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

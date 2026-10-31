@@ -870,6 +870,23 @@ def register_core_api(app):
         """
         return _auth_page("Job details", "Review the role carefully before submitting an application.", content, script)
 
+    @app.get("/workspace/saved-jobs")
+    @_require_user
+    def core_saved_jobs_screen():
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return redirect("/workspace")
+        content = """<div id="saved" style="display:grid;gap:12px"><div class="empty">Loading saved jobs…</div></div>
+        <div id="message" class="error" role="status"></div><div class="links"><a href="/workspace/jobs">Discover more jobs</a><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const root=document.getElementById("saved"),message=document.getElementById("message");
+        async function load(){const r=await fetch("/api/v1/saved-jobs");const x=await r.json();root.innerHTML="";if(!r.ok){root.textContent=x.error?.message||"Unable to load saved jobs.";return;}
+        if(!x.data.length){root.innerHTML='<div class="empty">You have not saved any jobs yet.</div>';return;}
+        x.data.forEach(j=>{const el=document.createElement("article");el.style.cssText="padding:15px;border:1px solid #263852;border-radius:13px;background:#0d182a";const h=document.createElement("strong");h.textContent=j.title;const p=document.createElement("p");p.textContent=[j.organisation_name,j.location,j.work_mode].filter(Boolean).join(" · ");p.style.color="#9aabc3";const a=document.createElement("a");a.href="/workspace/jobs/"+encodeURIComponent(j.id);a.textContent="View job";a.style.color="#93baff";const b=document.createElement("button");b.textContent="Remove";b.style.cssText="width:auto;margin:12px 0 0;padding:9px 13px;background:#25354e";b.addEventListener("click",async()=>{const c=await fetch("/api/v1/auth/csrf").then(r=>r.json());const r=await fetch("/api/v1/jobs/"+encodeURIComponent(j.id)+"/save",{method:"DELETE",headers:{"X-CSRF-Token":c.data.csrf_token}});if(r.ok)load();else message.textContent="Could not remove saved job.";});el.append(h,p,a,b);root.append(el);});}
+        load();
+        """
+        return _auth_page("Saved jobs", "Keep track of opportunities you want to revisit.", content, script)
+
     @app.get("/workspace/applications")
     @_require_user
     def core_applications_screen():
@@ -1563,6 +1580,8 @@ def register_core_api(app):
             return redirect("/workspace/jobs" if user["role"] == "job_seeker" else "/workspace/employer/jobs")
         if module_key == "applications":
             return redirect("/workspace/applications")
+        if module_key == "saved-jobs":
+            return redirect("/workspace/saved-jobs")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

@@ -715,7 +715,7 @@ def register_core_api(app):
         allowed = (
             request.path in {"/auth/login", "/auth/logout", "/register", "/forgot-password",
                              "/reset-password", "/verify-email", "/terms", "/privacy",
-                             "/onboarding", "/profile", "/wallet", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
+                             "/onboarding", "/profile", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
                              "/api/v1/dashboard"}
             or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/api/v1/auth/")
@@ -813,6 +813,45 @@ def register_core_api(app):
         }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Save and continue";}});
         """
         return _auth_page("Let's set up your workspace", "A few details help Career Agency prepare the right tools for your account.", content, script)
+
+    @app.get("/ai-assistant")
+    @_require_user
+    def core_ai_assistant_screen():
+        user = _current_user()
+        if not user["onboarding_completed_at"]:
+            return redirect("/onboarding")
+        content = """
+        <div id="chat" style="display:grid;gap:12px;min-height:180px;max-height:42vh;overflow:auto;padding:14px;border:1px solid #263852;border-radius:14px;background:#091222">
+        <div style="color:#9aabc3;font-size:13px">Welcome. Tell me what career task you would like help with. I will show the credit cost before running an AI action.</div></div>
+        <form id="chat-form"><label for="message-input">Your message</label><textarea id="message-input" rows="3" maxlength="8000" placeholder="Ask about your CV, job search or interview preparation…" required></textarea>
+        <button id="send" type="submit">Continue</button><div id="error" class="error" role="alert"></div></form>
+        <div id="confirm" style="display:none;position:fixed;inset:0;z-index:10;background:#020617d9;place-items:center;padding:18px">
+        <div style="width:min(100%,390px);border:1px solid #344968;border-radius:18px;background:#111d33;padding:22px;box-shadow:0 25px 80px #000b">
+        <div style="font-size:10px;letter-spacing:.16em;color:#8db8ff;font-weight:800">USING CREDITS</div>
+        <h2 style="font:700 19px Manrope;margin:8px 0 20px">AI Assistant</h2>
+        <div style="font-size:10px;letter-spacing:.13em;color:#91a3bd">DEBITING CREDITS</div>
+        <div id="debit" style="font:800 30px Manrope;margin:5px 0 18px">−5 Credits</div>
+        <div style="display:flex;justify-content:space-between;color:#a8b9d1;font-size:12px;margin:8px 0"><span>Total credits</span><strong id="total">—</strong></div>
+        <div style="display:flex;justify-content:space-between;color:#a8b9d1;font-size:12px;margin:8px 0"><span>Remaining credits</span><strong id="remaining">—</strong></div>
+        <p style="font-size:12px;color:#9aabc3;line-height:1.55;margin:17px 0">Confirm to run this AI request. Cancelling will not deduct credits.</p>
+        <div style="display:flex;gap:10px"><button id="cancel" type="button" style="margin:0;background:#25354e">Cancel</button><button id="confirm-button" type="button" style="margin:0">Confirm</button></div>
+        </div></div>
+        <div class="links"><a href="/workspace">Back to workspace</a><a href="/wallet">Buy credits</a></div>"""
+        script = """
+        const form=document.getElementById("chat-form"),input=document.getElementById("message-input"),send=document.getElementById("send"),error=document.getElementById("error"),chat=document.getElementById("chat"),modal=document.getElementById("confirm"),confirmBtn=document.getElementById("confirm-button");
+        let pendingQuote=null,pendingInput=null;
+        function csrf(){return fetch("/api/v1/auth/csrf").then(r=>r.json()).then(x=>x.data.csrf_token);}
+        function addMessage(label,text){const d=document.createElement("div");d.style.cssText="padding:11px 12px;border-radius:11px;background:#14233b;color:#e4edfb;font-size:13px;line-height:1.6;white-space:pre-wrap";const b=document.createElement("b");b.textContent=label;const p=document.createElement("div");p.textContent=text;d.append(b,p);chat.append(d);chat.scrollTop=chat.scrollHeight;}
+        form.addEventListener("submit",async ev=>{ev.preventDefault();const message=input.value.trim();if(!message)return;send.disabled=true;send.textContent="Checking cost…";error.textContent="";
+        try{const token=await csrf();const r=await fetch("/api/v1/ai/quote",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({action:"chat",input:{message}})});const x=await r.json();if(!r.ok){if(r.status===402)throw new Error("You need "+x.error.required+" credits but have "+x.error.available+". Visit your wallet to buy credits.");throw new Error(x.error?.message||"Could not prepare this AI request.");}
+        pendingQuote=x.data;pendingInput={message};document.getElementById("debit").textContent="−"+x.data.credits_cost+" Credits";document.getElementById("total").textContent=Number(x.data.total_credits).toLocaleString();document.getElementById("remaining").textContent=Number(x.data.remaining_credits).toLocaleString();modal.style.display="grid";
+        }catch(e){error.textContent=e.message;}finally{send.disabled=false;send.textContent="Continue";}});
+        document.getElementById("cancel").addEventListener("click",()=>{pendingQuote=null;pendingInput=null;modal.style.display="none";});
+        confirmBtn.addEventListener("click",async()=>{if(!pendingQuote)return;confirmBtn.disabled=true;confirmBtn.textContent="Processing…";error.textContent="";
+        try{const token=await csrf();const r=await fetch("/api/v1/ai/actions/chat",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({input:pendingInput,quote_id:pendingQuote.quote_id,quote_token:pendingQuote.quote_token})});const x=await r.json();modal.style.display="none";if(!r.ok)throw new Error(x.error?.message||"The AI request could not be completed.");addMessage("You",pendingInput.message);addMessage("Career Agency AI",JSON.stringify(x.data.result));input.value="";pendingQuote=null;pendingInput=null;
+        }catch(e){error.textContent=e.message;}finally{confirmBtn.disabled=false;confirmBtn.textContent="Confirm";}});
+        """
+        return _auth_page("AI assistant", "Get career support with transparent, confirmed credit usage.", content, script)
 
     @app.get("/wallet")
     @_require_user
@@ -1179,6 +1218,8 @@ def register_core_api(app):
             return redirect("/profile")
         if module_key == "wallet":
             return redirect("/wallet")
+        if module_key == "ai-assistant":
+            return redirect("/ai-assistant")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

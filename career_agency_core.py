@@ -718,6 +718,9 @@ def register_core_api(app):
                              "/onboarding", "/profile", "/wallet", "/ai-assistant", "/payments/return", "/api/v1/profile", "/api/v1/wallet", "/api/v1/wallet/ledger", "/api/v1/credit-packages",
                              "/api/v1/dashboard"}
             or request.path.startswith("/workspace/modules/")
+            or request.path.startswith("/workspace/jobs")
+            or request.path.startswith("/workspace/applications")
+            or request.path.startswith("/workspace/employer/jobs")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")
@@ -818,6 +821,98 @@ def register_core_api(app):
         }catch(x){e.textContent=x.message;}finally{b.disabled=false;b.textContent="Save and continue";}});
         """
         return _auth_page("Let's set up your workspace", "A few details help Career Agency prepare the right tools for your account.", content, script)
+
+    @app.get("/workspace/jobs")
+    @_require_user
+    def core_job_discovery_screen():
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return redirect("/workspace/employer/jobs" if user["role"] == "employer" else "/workspace")
+        content = """
+        <form id="search-form"><label>Search roles</label><input name="q" placeholder="Job title or keyword">
+        <label>Location</label><input name="location" placeholder="City, state or remote">
+        <label>Work arrangement</label><select name="work_mode"><option value="">Any</option><option value="remote">Remote</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select>
+        <label>Employment type</label><select name="employment_type"><option value="">Any</option><option value="full_time">Full-time</option><option value="part_time">Part-time</option><option value="contract">Contract</option><option value="internship">Internship</option><option value="temporary">Temporary</option></select>
+        <button type="submit" id="search">Search jobs</button></form>
+        <div id="results" style="display:grid;gap:12px;margin-top:22px"><div class="empty">Loading available jobs…</div></div>
+        <div id="error" class="error" role="alert"></div><div class="links"><a href="/workspace">Back to workspace</a><a href="/workspace/applications">My applications</a></div>"""
+        script = """
+        const f=document.getElementById("search-form"),results=document.getElementById("results"),error=document.getElementById("error");
+        function card(j){const el=document.createElement("article");el.style.cssText="padding:17px;border:1px solid #263852;border-radius:14px;background:#0d182a";
+        const h=document.createElement("h3");h.textContent=j.title;h.style.margin="0 0 6px";const org=document.createElement("p");org.textContent=j.organisation_name||"Employer";org.style.cssText="color:#9aabc3;font-size:12px;margin:0 0 8px";
+        const meta=document.createElement("p");meta.textContent=[j.location,j.work_mode,j.employment_type].filter(Boolean).join(" · ");meta.style.cssText="color:#91a3bd;font-size:12px";
+        const a=document.createElement("a");a.href="/workspace/jobs/"+encodeURIComponent(j.id);a.textContent="View job";a.style.color="#93baff";el.append(h,org,meta,a);return el;}
+        async function load(){error.textContent="";results.innerHTML='<div class="empty">Searching…</div>';const p=new URLSearchParams(new FormData(f));try{const r=await fetch("/api/v1/jobs?"+p.toString());const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not load jobs.");results.innerHTML="";if(!x.data.jobs.length){results.innerHTML='<div class="empty">No published jobs match those filters yet. Try a broader search.</div>';return;}x.data.jobs.forEach(j=>results.append(card(j)));}catch(e){error.textContent=e.message;results.innerHTML='<div class="empty">Job search is temporarily unavailable.</div>';}}
+        f.addEventListener("submit",e=>{e.preventDefault();load();});load();
+        """
+        return _auth_page("Discover jobs", "Explore published opportunities and manage your applications.", content, script)
+
+    @app.get("/workspace/jobs/<job_id>")
+    @_require_user
+    def core_job_detail_screen(job_id):
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return redirect("/workspace")
+        content = """
+        <div id="job"><div class="empty">Loading job details…</div></div>
+        <div id="actions" style="display:none;gap:10px;margin-top:18px"><button id="save" type="button" style="margin:0;background:#253a59">Save job</button><button id="apply-toggle" type="button" style="margin:0">Apply now</button></div>
+        <form id="apply-form" style="display:none;margin-top:18px"><label>Cover letter (optional)</label><textarea name="cover_letter" rows="6" maxlength="5000" placeholder="Explain why you are interested in this role…"></textarea><button id="submit" type="submit">Submit application</button></form>
+        <div id="message" class="error" role="status"></div><div class="links"><a href="/workspace/jobs">Back to jobs</a><a href="/workspace/applications">My applications</a></div>"""
+        script = """
+        const id=decodeURIComponent(location.pathname.split("/").pop()),box=document.getElementById("job"),actions=document.getElementById("actions"),msg=document.getElementById("message"),form=document.getElementById("apply-form");
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        fetch("/api/v1/jobs/"+encodeURIComponent(id)).then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Job not found.");const j=x.data;
+        const h=document.createElement("h2");h.textContent=j.title;const org=document.createElement("p");org.textContent=j.organisation_name||"Employer";const meta=document.createElement("p");meta.textContent=[j.location,j.work_mode,j.employment_type].filter(Boolean).join(" · ");const desc=document.createElement("p");desc.textContent=j.description;desc.style.cssText="white-space:pre-wrap;line-height:1.7;color:#c6d3e6";box.innerHTML="";box.append(h,org,meta,desc);actions.style.display="flex";
+        }).catch(e=>{box.textContent=e.message;});
+        document.getElementById("save").addEventListener("click",async()=>{const token=await csrf();const r=await fetch("/api/v1/jobs/"+encodeURIComponent(id)+"/save",{method:"POST",headers:{"X-CSRF-Token":token}});const x=await r.json();msg.textContent=r.ok?"Job saved to your list.":(x.error?.message||"Could not save job.");});
+        document.getElementById("apply-toggle").addEventListener("click",()=>{form.style.display=form.style.display==="none"?"block":"none";});
+        form.addEventListener("submit",async e=>{e.preventDefault();const b=document.getElementById("submit");b.disabled=true;const token=await csrf();try{const r=await fetch("/api/v1/jobs/"+encodeURIComponent(id)+"/apply",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({cover_letter:form.elements.cover_letter.value})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Application failed.");msg.textContent="Your application has been submitted.";form.style.display="none";}catch(x){msg.textContent=x.message;}finally{b.disabled=false;}});
+        """
+        return _auth_page("Job details", "Review the role carefully before submitting an application.", content, script)
+
+    @app.get("/workspace/applications")
+    @_require_user
+    def core_applications_screen():
+        user = _current_user()
+        if user["role"] not in {"job_seeker", "employer", "admin"}:
+            return redirect("/workspace")
+        content = """<div id="applications" style="display:grid;gap:12px"><div class="empty">Loading applications…</div></div>
+        <div id="message" class="error" role="status"></div><div class="links"><a href="/workspace">Back to workspace</a><a href="/workspace/jobs">Discover jobs</a></div>"""
+        script = """
+        const root=document.getElementById("applications"),message=document.getElementById("message");
+        fetch("/api/v1/applications").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Unable to load applications.");root.innerHTML="";
+        if(!x.data.length){root.innerHTML='<div class="empty">No applications yet. Your application activity will appear here.</div>';return;}
+        x.data.forEach(a=>{const el=document.createElement("article");el.style.cssText="padding:15px;border:1px solid #263852;border-radius:13px;background:#0d182a";const h=document.createElement("strong");h.textContent=a.title||"Application";const p=document.createElement("p");p.textContent=[a.organisation_name,a.applicant_name,a.status].filter(Boolean).join(" · ");p.style.color="#9aabc3";const d=document.createElement("small");d.textContent=new Date(a.applied_at).toLocaleString();d.style.color="#7186a6";el.append(h,p,d);
+        if(a.status!=="withdrawn"&&a.status!=="rejected"&&a.status!=="offer"&&a.job_id){const link=document.createElement("a");link.href="/workspace/jobs/"+encodeURIComponent(a.job_id);link.textContent="View job";link.style.display="block";link.style.marginTop="9px";el.append(link);}root.append(el);});
+        }).catch(e=>{message.textContent=e.message;root.innerHTML='<div class="empty">Application data is temporarily unavailable.</div>';});
+        """
+        return _auth_page("Applications", "Track your submitted applications and their progress.", content, script)
+
+    @app.get("/workspace/employer/jobs")
+    @_require_user
+    def core_employer_jobs_screen():
+        user = _current_user()
+        if user["role"] != "employer":
+            return redirect("/workspace")
+        content = """
+        <form id="job-form"><h3>Create a job draft</h3><label>Job title</label><input name="title" maxlength="160" required>
+        <label>Description (minimum 40 characters)</label><textarea name="description" rows="6" minlength="40" maxlength="20000" required></textarea>
+        <label>Location</label><input name="location" maxlength="120">
+        <label>Work mode</label><select name="work_mode"><option value="onsite">On-site</option><option value="hybrid">Hybrid</option><option value="remote">Remote</option></select>
+        <label>Employment type</label><select name="employment_type"><option value="full_time">Full-time</option><option value="part_time">Part-time</option><option value="contract">Contract</option><option value="internship">Internship</option><option value="temporary">Temporary</option></select>
+        <label>Minimum monthly salary (NGN)</label><input name="salary_min_ngn" type="number" min="0">
+        <label>Maximum monthly salary (NGN)</label><input name="salary_max_ngn" type="number" min="0">
+        <button id="create" type="submit">Save job draft</button></form>
+        <div id="message" class="error" role="status"></div><h3 style="margin-top:25px">Your jobs</h3><div id="jobs" style="display:grid;gap:12px"><div class="empty">Loading jobs…</div></div>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const form=document.getElementById("job-form"),message=document.getElementById("message"),root=document.getElementById("jobs");
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        async function load(){const r=await fetch("/api/v1/jobs");const x=await r.json();root.innerHTML="";if(!r.ok){root.textContent=x.error?.message||"Unable to load jobs.";return;}if(!x.data.jobs.length){root.innerHTML='<div class="empty">You have not created any jobs yet.</div>';return;}
+        x.data.jobs.forEach(j=>{const el=document.createElement("div");el.style.cssText="padding:14px;border:1px solid #263852;border-radius:13px;background:#0d182a";const h=document.createElement("strong");h.textContent=j.title;const p=document.createElement("p");p.textContent="Status: "+j.status+" · "+(j.location||"Location not set");p.style.color="#9aabc3";el.append(h,p);if(j.status==="draft"){const b=document.createElement("button");b.textContent="Publish";b.style.marginTop="8px";b.addEventListener("click",async()=>{b.disabled=true;const t=await csrf();const r=await fetch("/api/v1/jobs/"+encodeURIComponent(j.id)+"/publish",{method:"POST",headers:{"X-CSRF-Token":t}});const x=await r.json();message.textContent=r.ok?"Job published.":(x.error?.message||"Unable to publish.");await load();});el.append(b);}root.append(el);});}
+        form.addEventListener("submit",async e=>{e.preventDefault();const b=document.getElementById("create"),d=Object.fromEntries(new FormData(form));b.disabled=true;message.textContent="";try{const t=await csrf();const r=await fetch("/api/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save job.");message.textContent="Job saved as a draft. Organisation verification is required before publication.";form.reset();await load();}catch(x){message.textContent=x.message;}finally{b.disabled=false;}});load();
+        """
+        return _auth_page("Manage jobs", "Create drafts, review your job posts and publish after organisation verification.", content, script)
 
     @app.get("/ai-assistant")
     @_require_user
@@ -1464,6 +1559,10 @@ def register_core_api(app):
             return redirect("/wallet")
         if module_key == "ai-assistant":
             return redirect("/ai-assistant")
+        if module_key == "jobs":
+            return redirect("/workspace/jobs" if user["role"] == "job_seeker" else "/workspace/employer/jobs")
+        if module_key == "applications":
+            return redirect("/workspace/applications")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

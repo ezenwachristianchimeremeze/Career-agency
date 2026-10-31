@@ -69,7 +69,7 @@ SETTINGS_HTML = '''
 </html>
 '''
 
-import v25_engine
+# v25_engine was absent from the audited repository and had no references in this file.
 import os
 import json
 import base64
@@ -8585,6 +8585,12 @@ def standalone_profile():
 @app.route('/settings')
 def standalone_settings():
     return render_template_string(SETTINGS_HTML)
+
+# --- Career Agency core API (additive rebuild integration) ---
+# Existing legacy routes remain in place while the new wallet/auth/payment APIs
+# are isolated in career_agency_core.py and use their own migration-managed DB.
+from career_agency_core import register_core_api
+register_core_api(app)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

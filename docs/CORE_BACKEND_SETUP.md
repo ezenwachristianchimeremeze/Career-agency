@@ -105,3 +105,8 @@ A passing core test workflow is not equivalent to a full regression test of the 
 ## Mobile authentication
 
 Native mobile clients can use the endpoints and token-storage rules in docs/MOBILE_AUTH_AND_ONBOARDING.md. Backend token APIs are implemented, but native application screens and device testing are not yet complete.
+
+
+## AI credit confirmation
+
+The AI assistant UI uses POST /api/v1/ai/quote before POST /api/v1/ai/actions/chat. The backend checks SQLite cache before debit and requires a one-time confirmation quote. The quote expires after 120 seconds and can only be consumed once. Provider errors are automatically refunded. Other paid AI screens must reuse this quote/confirm pattern rather than calling action endpoints directly.

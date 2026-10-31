@@ -678,6 +678,10 @@ def register_core_api(app):
     def core_resend_verification():
         data = request.get_json(silent=True) or {}
         email = str(data.get("email", "")).strip().lower()
+        bucket = hashlib.sha256(((request.remote_addr or "unknown") + ":" + email).encode()).hexdigest()
+        if not _rate_limit("resend-verification:" + bucket, 4, 900):
+            return jsonify({"data": {"message": "If the account needs verification, a new email will be sent shortly."},
+                            "request_id": str(uuid.uuid4())})
         with _connect() as db:
             user = db.execute("SELECT id,email_verified_at FROM users WHERE email=?", (email,)).fetchone()
         if user and not user["email_verified_at"]:
@@ -694,6 +698,10 @@ def register_core_api(app):
     def core_forgot_password():
         data = request.get_json(silent=True) or {}
         email = str(data.get("email", "")).strip().lower()
+        bucket = hashlib.sha256(((request.remote_addr or "unknown") + ":" + email).encode()).hexdigest()
+        if not _rate_limit("forgot-password:" + bucket, 4, 900):
+            return jsonify({"data": {"message": "If an account exists for that address, password reset instructions will be sent shortly."},
+                            "request_id": str(uuid.uuid4())})
         with _connect() as db:
             user = db.execute("SELECT id FROM users WHERE email=? AND account_status='active'", (email,)).fetchone()
         if user:
@@ -711,8 +719,11 @@ def register_core_api(app):
         data = request.get_json(silent=True) or {}
         raw = str(data.get("token", ""))
         password = str(data.get("password", ""))
-        if len(password) < 10:
-            return _json_error("VALIDATION_ERROR", "Password must contain at least 10 characters.", 400)
+        confirm = str(data.get("confirm_password", password))
+        if len(password) < 10 or len(password) > 1024:
+            return _json_error("VALIDATION_ERROR", "Password must contain between 10 and 1024 characters.", 400)
+        if password != confirm:
+            return _json_error("PASSWORD_MISMATCH", "The passwords do not match.", 400)
         digest = hashlib.sha256(raw.encode()).hexdigest()
         with _connect() as db:
             db.execute("BEGIN IMMEDIATE")

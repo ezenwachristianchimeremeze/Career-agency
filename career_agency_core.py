@@ -458,6 +458,19 @@ def register_core_api(app):
     app.config.setdefault("SESSION_COOKIE_SECURE", os.environ.get("CAREER_AGENCY_COOKIE_SECURE", "0") == "1")
     _init_db()
 
+    @app.after_request
+    def career_agency_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if request.path.startswith("/auth/") or request.path in {"/register", "/verify-email", "/forgot-password", "/reset-password"} or request.path.startswith("/api/v1/auth/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+        if request.is_secure:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
+
     @app.before_request
     def career_agency_auth_first():
         # Legacy routes are isolated until their ownership checks are migrated.
@@ -807,6 +820,19 @@ def register_core_api(app):
         return jsonify({"data": {"user": {"id": user["id"], "email": user["email"],
             "full_name": user["full_name"], "role": user["role"]},
             "wallet": {"credits": user["credits"]}}, "request_id": str(uuid.uuid4())})
+
+    @app.get("/auth/logout")
+    def core_logout_screen():
+        content = """<p>You are about to sign out of this device.</p>
+        <button id="signout" type="button">Sign out</button>
+        <div id="error" class="error" role="alert"></div>
+        <div class="links"><a href="/workspace">Return to workspace</a></div>"""
+        script = """
+        document.getElementById("signout").addEventListener("click",async()=>{const b=document.getElementById("signout"),e=document.getElementById("error");b.disabled=true;
+        try{const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());const r=await fetch("/api/v1/auth/logout",{method:"POST",headers:{"X-CSRF-Token":c.data.csrf_token}});if(!r.ok)throw new Error("Could not sign out. Please retry.");location.href="/auth/login";}
+        catch(x){e.textContent=x.message;b.disabled=false;}});
+        """
+        return _auth_page("Sign out", "End your current Career Agency session.", content, script)
 
     @app.post("/api/v1/auth/logout")
     def core_logout():

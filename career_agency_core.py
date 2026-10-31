@@ -719,10 +719,13 @@ def register_core_api(app):
                              "/api/v1/dashboard", "/api/v1/saved-jobs"}
             or request.path == "/api/v1/cvs"
             or request.path.startswith("/api/v1/cvs/")
+            or request.path == "/api/v1/cvs"
+            or request.path.startswith("/api/v1/cvs/")
             or request.path.startswith("/workspace/modules/")
             or request.path.startswith("/workspace/jobs")
             or request.path.startswith("/workspace/applications")
             or request.path.startswith("/workspace/employer/jobs")
+            or request.path.startswith("/workspace/cv-studio")
             or request.path.startswith("/api/v1/auth/")
             or request.path.startswith("/api/v1/mobile/auth/")
             or request.path.startswith("/api/v1/onboarding/")
@@ -938,6 +941,45 @@ def register_core_api(app):
         form.addEventListener("submit",async e=>{e.preventDefault();const b=document.getElementById("create"),d=Object.fromEntries(new FormData(form));b.disabled=true;message.textContent="";try{const t=await csrf();const r=await fetch("/api/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":t},body:JSON.stringify(d)});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not save job.");message.textContent="Job saved as a draft. Organisation verification is required before publication.";form.reset();await load();}catch(x){message.textContent=x.message;}finally{b.disabled=false;}});load();
         """
         return _auth_page("Manage jobs", "Create drafts, review your job posts and publish after organisation verification.", content, script)
+
+    @app.get("/workspace/cv-studio")
+    @_require_user
+    def core_cv_studio_screen():
+        user = _current_user()
+        if user["role"] != "job_seeker":
+            return redirect("/workspace")
+        content = """
+        <div id="cv-list" style="display:grid;gap:8px;margin-bottom:20px"><div class="empty">Loading your CV library…</div></div>
+        <form id="cv-form"><label>Document title</label><input name="title" maxlength="160" required placeholder="e.g. Software Developer CV">
+        <label>CV content</label><textarea name="content_text" rows="14" maxlength="50000" placeholder="Add your professional summary, experience, education, skills and projects. Use clear section headings." required></textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button id="save" type="submit">Save CV</button><button id="new" type="button" style="background:#25354e">New CV</button></div></form>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button id="improve" type="button" style="background:#315f9f">Improve with AI</button><button id="delete" type="button" style="background:#57303a">Delete CV</button></div>
+        <div id="message" class="error" role="status"></div><div id="ai-result" style="display:none;border:1px solid #294266;border-radius:13px;padding:15px;margin-top:15px"><h3>AI suggestion</h3><pre id="ai-text" style="white-space:pre-wrap;font:13px/1.6 'DM Sans',sans-serif;color:#d5e1f1"></pre><button id="apply-ai" type="button">Use this suggestion</button></div>
+        <div id="confirm" style="display:none;position:fixed;inset:0;z-index:10;background:#020617d9;place-items:center;padding:18px"><div style="width:min(100%,390px);border:1px solid #344968;border-radius:18px;background:#111d33;padding:22px">
+        <div style="font-size:10px;letter-spacing:.16em;color:#8db8ff;font-weight:800">USING CREDITS</div><h2 style="font:700 19px Manrope;margin:8px 0 20px">CV improvement</h2>
+        <div style="font-size:10px;letter-spacing:.13em;color:#91a3bd">DEBITING CREDITS</div><div id="debit" style="font:800 30px Manrope;margin:5px 0 18px">−25 Credits</div>
+        <div style="display:flex;justify-content:space-between;color:#a8b9d1;font-size:12px;margin:8px 0"><span>Total credits</span><strong id="total">—</strong></div>
+        <div style="display:flex;justify-content:space-between;color:#a8b9d1;font-size:12px;margin:8px 0"><span>Remaining credits</span><strong id="remaining">—</strong></div>
+        <p style="font-size:12px;color:#9aabc3;line-height:1.55">Review this charge before the AI service processes your CV. Cancelling does not deduct credits.</p>
+        <div style="display:flex;gap:10px"><button id="cancel" type="button" style="margin:0;background:#25354e">Cancel</button><button id="confirm-button" type="button" style="margin:0">Confirm</button></div></div></div>
+        <div class="links"><a href="/workspace">Back to workspace</a></div>"""
+        script = """
+        const list=document.getElementById("cv-list"),form=document.getElementById("cv-form"),msg=document.getElementById("message"),modal=document.getElementById("confirm"),resultBox=document.getElementById("ai-result");
+        let currentId=null,pendingQuote=null,aiSuggestion="";
+        async function csrf(){return (await fetch("/api/v1/auth/csrf").then(r=>r.json())).data.csrf_token;}
+        async function load(){const r=await fetch("/api/v1/cvs");const x=await r.json();list.innerHTML="";if(!r.ok){list.textContent=x.error?.message||"Unable to load CVs.";return;}if(!x.data.length){list.innerHTML='<div class="empty">No CV documents yet. Create your first CV below.</div>';return;}
+        x.data.forEach(cv=>{const b=document.createElement("button");b.type="button";b.textContent=cv.title+" · "+cv.document_status;b.style.cssText="margin:0;text-align:left;background:#14233b;border:1px solid #263852";b.addEventListener("click",()=>openCv(cv.id));list.append(b);});}
+        async function openCv(id){const r=await fetch("/api/v1/cvs/"+encodeURIComponent(id));const x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Could not open CV.";return;}currentId=id;form.elements.title.value=x.data.title;form.elements.content_text.value=x.data.content_text||"";resultBox.style.display="none";msg.textContent="CV loaded.";}
+        form.addEventListener("submit",async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form)),token=await csrf();const url=currentId?"/api/v1/cvs/"+encodeURIComponent(currentId):"/api/v1/cvs";const method=currentId?"PATCH":"POST";const r=await fetch(url,{method,headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify(d)});const x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Could not save CV.";return;}currentId=x.data.id||currentId;msg.textContent="CV saved.";load();});
+        document.getElementById("new").addEventListener("click",()=>{currentId=null;form.reset();resultBox.style.display="none";msg.textContent="New CV draft ready.";});
+        document.getElementById("delete").addEventListener("click",async()=>{if(!currentId){msg.textContent="Select a saved CV first.";return;}const token=await csrf();const r=await fetch("/api/v1/cvs/"+encodeURIComponent(currentId),{method:"DELETE",headers:{"X-CSRF-Token":token}});const x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Could not delete CV.";return;}currentId=null;form.reset();msg.textContent="CV deleted.";load();});
+        document.getElementById("improve").addEventListener("click",async()=>{if(!currentId){msg.textContent="Save or select a CV before requesting AI improvement.";return;}const token=await csrf();msg.textContent="Checking AI improvement cost…";const input={document_id:currentId,operation:"improve",content_text:form.elements.content_text.value};const r=await fetch("/api/v1/ai/quote",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({action:"cv",input})});const x=await r.json();if(!r.ok){msg.textContent=x.error?.message||"Unable to quote AI improvement.";return;}pendingQuote=x.data;window.pendingCvInput=input;document.getElementById("debit").textContent="−"+x.data.credits_cost+" Credits";document.getElementById("total").textContent=Number(x.data.total_credits).toLocaleString();document.getElementById("remaining").textContent=Number(x.data.remaining_credits).toLocaleString();modal.style.display="grid";msg.textContent="";});
+        document.getElementById("cancel").addEventListener("click",()=>{pendingQuote=null;modal.style.display="none";});
+        document.getElementById("confirm-button").addEventListener("click",async()=>{if(!pendingQuote)return;const b=document.getElementById("confirm-button");b.disabled=true;b.textContent="Processing…";try{const token=await csrf();const r=await fetch("/api/v1/ai/actions/cv",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":token},body:JSON.stringify({input:window.pendingCvInput,quote_id:pendingQuote.quote_id,quote_token:pendingQuote.quote_token})});const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"AI improvement failed.");aiSuggestion=typeof x.data.result==="string"?x.data.result:JSON.stringify(x.data.result,null,2);document.getElementById("ai-text").textContent=aiSuggestion;resultBox.style.display="block";modal.style.display="none";pendingQuote=null;msg.textContent="AI suggestion ready. Review it before applying."; }catch(e){msg.textContent=e.message;}finally{b.disabled=false;b.textContent="Confirm";}});
+        document.getElementById("apply-ai").addEventListener("click",()=>{if(!aiSuggestion)return;form.elements.content_text.value=aiSuggestion;msg.textContent="Suggestion placed in the editor. Save the CV to keep this change.";});
+        load();
+        """
+        return _auth_page("CV Studio", "Create and manage your CV. Manual editing is free; AI improvements show their cost before confirmation.", content, script)
 
     @app.get("/ai-assistant")
     @_require_user
@@ -1655,6 +1697,8 @@ def register_core_api(app):
             return redirect("/workspace/applications")
         if module_key == "saved-jobs":
             return redirect("/workspace/saved-jobs")
+        if module_key == "cv-studio":
+            return redirect("/workspace/cv-studio")
         if not title:
             return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
         content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">

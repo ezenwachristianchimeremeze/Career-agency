@@ -953,22 +953,103 @@ def register_core_api(app):
         user = _current_user()
         if not user["onboarding_completed_at"]:
             return redirect("/onboarding")
+        role = user["role"]
         role_names = {"job_seeker": "Job Seeker", "employer": "Employer", "recruiter": "Recruiter", "admin": "Administrator"}
-        role = role_names.get(user["role"], "Career Agency")
-        safe_name = user["full_name"]
-        content = """
-        <div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:22px 0">
-        <div style="color:#83b5ff;font-size:11px;letter-spacing:.12em;font-weight:800">ACCOUNT READY</div>
-        <p style="color:#dce8f8;line-height:1.7;margin:10px 0 0">Your account is verified and your sign-in is secure. The role-specific workspace is being connected to the new data services.</p>
-        </div>
-        <p style="color:#9aabc3;font-size:13px">Account type: """ + role + """</p>
-        <p style="color:#9aabc3;font-size:13px">Wallet balance: """ + str(user["credits"]) + """ credits</p>
-        <form id="logout-form"><button type="submit">Sign out</button></form>
-        <div id="message" class="error" role="status"></div>"""
-        script = """
-        document.getElementById("logout-form").addEventListener("submit",async ev=>{ev.preventDefault();const c=await fetch("/api/v1/auth/csrf").then(x=>x.json());await fetch("/api/v1/auth/logout",{method:"POST",headers:{"X-CSRF-Token":c.data.csrf_token}});location.href="/auth/login";});
-        """
-        return _auth_page("Welcome, " + safe_name, "Your " + role + " account is ready.", content, script)
+        role_label = role_names.get(role, "Career Agency")
+        nav_by_role = {
+            "job_seeker": [("Overview", "dashboard"), ("Discover jobs", "jobs"), ("My applications", "applications"),
+                           ("Saved jobs", "saved-jobs"), ("CV Studio", "cv-studio"), ("AI assistant", "ai-assistant"),
+                           ("Interview preparation", "interviews"), ("Career roadmap", "career-roadmap")],
+            "employer": [("Overview", "dashboard"), ("My jobs", "jobs"), ("Applicants", "applicants"),
+                         ("Find candidates", "candidates"), ("Interviews", "interviews"), ("Team", "team"),
+                         ("Analytics", "analytics")],
+            "recruiter": [("Overview", "dashboard"), ("Candidate search", "candidates"), ("Pipeline", "pipeline"),
+                          ("Clients", "clients"), ("Interviews", "interviews"), ("Reports", "reports")],
+            "admin": [("Overview", "dashboard"), ("Users", "users"), ("Jobs", "jobs"),
+                      ("Applications", "applications"), ("Employers", "employers"), ("Recruiters", "recruiters"),
+                      ("Payments", "payments"), ("Credit management", "credit-management"), ("Audit logs", "audit-logs")]
+        }
+        nav_html = "".join('<a class="nav-link" href="/workspace/modules/' + key + '">' + label + '</a>'
+                           for label, key in nav_by_role.get(role, []))
+        safe_name = str(user["full_name"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        page = String = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+        <title>Workspace · Career Agency</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+        <style>
+        *{box-sizing:border-box}body{margin:0;background:#080d19;color:#f4f7fc;font-family:"DM Sans",system-ui,sans-serif}
+        .shell{min-height:100vh;display:grid;grid-template-columns:250px minmax(0,1fr)}
+        aside{background:#0b1425;border-right:1px solid #1d2b43;padding:25px 17px;display:flex;flex-direction:column}
+        .brand{display:flex;align-items:center;gap:11px;padding:0 8px 28px}.mark{width:40px;height:40px;border-radius:13px;background:linear-gradient(135deg,#91bdff,#3275e7);display:grid;place-items:center;color:#071329;font-weight:900;font-family:Manrope}
+        .brand strong{font:800 12px Manrope;letter-spacing:.14em}.brand small{display:block;color:#7387a6;font-size:10px;margin-top:4px}
+        .role{font-size:10px;color:#7186a6;text-transform:uppercase;letter-spacing:.14em;padding:0 10px 12px}
+        .nav{display:grid;gap:5px}.nav-link{color:#9fb0c9;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:13px}.nav-link:hover,.nav-link.active{background:#172844;color:#e8f1ff}
+        .aside-bottom{margin-top:auto;border-top:1px solid #1d2b43;padding-top:15px;display:grid;gap:7px}
+        main{min-width:0;padding:30px clamp(18px,4vw,54px) 90px}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:34px}
+        .eyebrow{font-size:11px;color:#82adf3;letter-spacing:.15em;text-transform:uppercase;font-weight:700}
+        h1{font:800 clamp(25px,4vw,34px) Manrope;margin:8px 0 6px;letter-spacing:-.04em}.muted{color:#91a3bd;font-size:14px;line-height:1.6}
+        .wallet{border:1px solid #294266;background:#101e34;border-radius:14px;padding:12px 16px;min-width:150px;text-decoration:none;color:#e8f1ff}
+        .wallet small{display:block;color:#91a3bd;font-size:10px;letter-spacing:.1em}.wallet strong{font:800 20px Manrope}
+        .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:25px 0}
+        .stat{background:#101a2d;border:1px solid #21324d;border-radius:16px;padding:18px;min-height:116px}
+        .stat span{color:#9aabc3;font-size:12px}.stat strong{display:block;font:800 27px Manrope;margin-top:12px}
+        .section{margin-top:34px}.section h2{font:700 17px Manrope;margin:0 0 14px}
+        .actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+        .action{display:block;text-decoration:none;color:#eaf2ff;background:#101a2d;border:1px solid #263852;border-radius:15px;padding:18px}
+        .action b{display:block;font:700 14px Manrope;margin-bottom:7px}.action span{color:#95a8c3;font-size:12px;line-height:1.5}
+        .empty{border:1px dashed #31445f;border-radius:16px;padding:24px;color:#94a7c2;font-size:13px;line-height:1.6}
+        .error{color:#ffaaa8}.mobile-nav{display:none}
+        @media(max-width:1050px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media(max-width:720px){.shell{display:block}aside{display:none}main{padding:22px 16px 105px}.top{align-items:flex-start}.wallet{min-width:120px}.grid{gap:10px}.stat{padding:14px;min-height:98px}.stat strong{font-size:23px}.actions{grid-template-columns:1fr}.mobile-nav{display:flex;position:fixed;z-index:5;left:0;right:0;bottom:0;background:#0b1425;border-top:1px solid #243550;padding:9px 6px calc(9px + env(safe-area-inset-bottom));justify-content:space-around}.mobile-nav a{color:#a8bad2;text-decoration:none;font-size:10px;text-align:center;padding:6px 5px}}
+        </style></head><body><div class="shell"><aside><div class="brand"><div class="mark">CA</div><div><strong>CAREER AGENCY</strong><small>CAREER GROWTH, WITH DIRECTION</small></div></div>
+        <div class="role">""" + role_label + """ WORKSPACE</div><nav class="nav">""" + nav_html + """</nav>
+        <div class="aside-bottom"><a class="nav-link" href="/workspace/modules/profile">My profile</a><a class="nav-link" href="/workspace/modules/settings">Settings</a><a class="nav-link" href="/auth/logout">Sign out</a></div></aside>
+        <main><div class="top"><div><div class="eyebrow">CAREER AGENCY / OVERVIEW</div><h1>Welcome back, """ + safe_name + """</h1><div class="muted">Here is your workspace at a glance.</div></div>
+        <a class="wallet" href="/workspace/modules/wallet"><small>CAREER CREDITS</small><strong id="credits">""" + str(user["credits"]) + """</strong></a></div>
+        <div class="grid" id="stats"><div class="stat"><span>Loading your overview</span><strong>—</strong></div></div>
+        <section class="section"><h2>Quick actions</h2><div class="actions">
+        <a class="action" href="/workspace/modules/jobs"><b>Explore opportunities</b><span>Find roles and manage opportunities relevant to your goals.</span></a>
+        <a class="action" href="/workspace/modules/cv-studio"><b>Open CV Studio</b><span>Prepare and manage your professional documents.</span></a>
+        <a class="action" href="/workspace/modules/ai-assistant"><b>Open AI assistant</b><span>Get structured help with your next career task.</span></a>
+        </div></section>
+        <section class="section"><h2>Recent activity</h2><div class="empty" id="activity">Your recent activity will appear here as you use Career Agency.</div></section>
+        <div id="dashboard-error" class="error" role="alert"></div></main></div>
+        <nav class="mobile-nav"><a href="/workspace">Home</a><a href="/workspace/modules/jobs">Jobs</a><a href="/workspace/modules/applications">Applications</a><a href="/workspace/modules/profile">Profile</a><a href="/workspace/modules/wallet">Wallet</a></nav>
+        <script>
+        const role=""" + json.dumps(role) + """;
+        const labels={job_seeker:[["applications","Applications"],["saved_jobs","Saved jobs"],["cv_documents","CV documents"],["upcoming_interviews","Upcoming interviews"]],
+        employer:[["active_jobs","Active jobs"],["total_jobs","Total jobs"],["applicants","Applicants"],["upcoming_interviews","Upcoming interviews"]],
+        recruiter:[["pipeline_candidates","Pipeline candidates"],["unread_notifications","Unread notifications"]],
+        admin:[["users","Users"],["jobs","Jobs"],["applications","Applications"],["pending_employers","Pending employers"]]};
+        fetch("/api/v1/dashboard").then(async r=>{const x=await r.json();if(!r.ok)throw new Error(x.error?.message||"Could not load dashboard.");const d=x.data;document.getElementById("credits").textContent=d.credits.toLocaleString();
+        const items=labels[role]||[];document.getElementById("stats").innerHTML=items.map(([k,label])=>'<div class="stat"><span>'+label+'</span><strong>'+Number(d.metrics[k]||0).toLocaleString()+'</strong></div>').join("");
+        }).catch(e=>{document.getElementById("dashboard-error").textContent=e.message;document.getElementById("stats").innerHTML='<div class="empty">Dashboard data is temporarily unavailable. Refresh to try again.</div>';});
+        </script></body></html>"""
+        return page
+
+    @app.get("/workspace/modules/<module_key>")
+    @_require_user
+    def core_workspace_module_placeholder(module_key):
+        user = _current_user()
+        if not user["onboarding_completed_at"]:
+            return redirect("/onboarding")
+        module_titles = {
+            "dashboard": "Overview", "jobs": "Job discovery and management", "applications": "Applications",
+            "saved-jobs": "Saved jobs", "cv-studio": "CV Studio", "ai-assistant": "AI assistant",
+            "interviews": "Interview preparation", "career-roadmap": "Career roadmap", "applicants": "Applicants",
+            "candidates": "Candidate search", "team": "Team management", "analytics": "Analytics",
+            "pipeline": "Recruitment pipeline", "clients": "Client management", "reports": "Reports",
+            "users": "User management", "employers": "Employer management", "recruiters": "Recruiter management",
+            "payments": "Payments", "credit-management": "Credit management", "audit-logs": "Audit logs",
+            "profile": "My profile", "settings": "Settings", "wallet": "Career Credits wallet"
+        }
+        title = module_titles.get(module_key)
+        if not title:
+            return _json_error("MODULE_NOT_FOUND", "This workspace module does not exist.", 404)
+        content = """<div style="padding:18px;border:1px solid #293d5b;border-radius:15px;background:#0a1425;margin:20px 0">
+        <p style="color:#dce8f8;line-height:1.7">This module is included in the approved Career Agency architecture. Its dedicated screens and service operations are being implemented in staged releases.</p>
+        <p style="color:#9aabc3;font-size:12px">Your existing account and data remain protected while this module is connected.</p></div>
+        <div class="links"><a href="/workspace">Return to overview</a></div>"""
+        return _auth_page(title, "Role: " + user["role"].replace("_", " ").title(), content)
 
     @app.get("/terms")
     def core_terms_draft():

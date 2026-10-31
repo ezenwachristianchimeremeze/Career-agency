@@ -39,6 +39,28 @@ def patch_json(http, path, payload):
     csrf = http.get("/api/v1/auth/csrf").get_json()["data"]["csrf_token"]
     return http.patch(path, json=payload, headers={"X-CSRF-Token": csrf})
 
+def create_role_user(client, email, role, name):
+    http, _, app = client
+    response = post_json(http, "/api/v1/auth/register", {
+        "full_name": name,
+        "email": email,
+        "password": "long-test-password-123",
+        "confirm_password": "long-test-password-123",
+        "role": role,
+        "terms_accepted": True,
+    })
+    assert response.status_code == 201
+    email_body = app.config["email_outbox"][-1][2]
+    verify_url = email_body.split("Verify your email: ", 1)[1]
+    token = parse_qs(urlparse(verify_url).query)["token"][0]
+    assert post_json(http, "/api/v1/auth/verify-email", {"token": token}).status_code == 200
+    assert post_json(http, "/api/v1/auth/login", {
+        "email": email,
+        "password": "long-test-password-123",
+    }).status_code == 200
+    return http
+
+
 def create_and_login(client):
     http, db_path, app = client
     created = post_json(http, "/api/v1/auth/register", {
@@ -243,6 +265,45 @@ def test_profile_get_and_patch_are_user_scoped(client):
     assert after["full_name"] == "Updated Candidate"
     assert after["city"] == "Lagos"
     assert after["headline"] == "Product Designer"
+
+
+def test_employer_can_create_draft_but_cannot_publish_unverified_organisation(client):
+    http = create_role_user(client, "employer@example.com", "employer", "Test Employer")
+    profile = put_json(http, "/api/v1/onboarding/profile", {
+        "country": "Nigeria",
+        "organization_name": "Example Technologies",
+        "website": "https://example.com",
+        "job_title": "Hiring Manager",
+    })
+    assert profile.status_code == 200
+    assert post_json(http, "/api/v1/onboarding/complete", {}).status_code == 200
+    created = post_json(http, "/api/v1/jobs", {
+        "title": "Backend Engineer",
+        "description": "We are looking for an engineer to build reliable APIs and maintain production services.",
+        "location": "Lagos, Nigeria",
+        "work_mode": "hybrid",
+        "employment_type": "full_time",
+        "salary_min_ngn": 500000,
+        "salary_max_ngn": 900000,
+    })
+    assert created.status_code == 201
+    job_id = created.get_json()["data"]["job_id"]
+    assert created.get_json()["data"]["status"] == "draft"
+    publish = post_json(http, "/api/v1/jobs/" + job_id + "/publish", {})
+    assert publish.status_code == 403
+    assert publish.get_json()["error"]["code"] == "ORGANISATION_NOT_VERIFIED"
+
+
+def test_job_seeker_cannot_create_jobs_and_only_sees_published_jobs(client):
+    http, _, _ = create_and_login(client)
+    denied = post_json(http, "/api/v1/jobs", {
+        "title": "Invalid attempt",
+        "description": "This description is long enough to pass the minimum description length check.",
+    })
+    assert denied.status_code == 403
+    listed = http.get("/api/v1/jobs")
+    assert listed.status_code == 200
+    assert listed.get_json()["data"]["jobs"] == []
 
 
 def test_role_dashboard_metrics_and_workspace_navigation(client):

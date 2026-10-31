@@ -395,7 +395,7 @@ def test_role_dashboard_metrics_and_workspace_navigation(client):
     page = http.get("/workspace")
     assert page.status_code == 200
     assert b"Welcome back, Test Candidate" in page.data
-    module = http.get("/workspace/modules/cv-studio")
+    module = http.get("/workspace/modules/cv-studio", follow_redirects=True)
     assert module.status_code == 200
     assert b"CV Studio" in module.data
 

@@ -796,6 +796,43 @@ def register_core_api(app):
         """
         return _auth_page("Let's set up your workspace", "A few details help Career Agency prepare the right tools for your account.", content, script)
 
+    @app.get("/api/v1/dashboard")
+    @_require_user
+    def core_dashboard():
+        user = _current_user()
+        uid = user["id"]
+        metrics = {}
+        with _connect() as db:
+            unread = db.execute("SELECT COUNT(*) AS n FROM notifications WHERE user_id=? AND read_at IS NULL", (uid,)).fetchone()["n"]
+            metrics["unread_notifications"] = int(unread)
+            if user["role"] == "job_seeker":
+                metrics["applications"] = int(db.execute("SELECT COUNT(*) AS n FROM applications WHERE applicant_user_id=?", (uid,)).fetchone()["n"])
+                metrics["saved_jobs"] = int(db.execute("SELECT COUNT(*) AS n FROM saved_jobs WHERE user_id=?", (uid,)).fetchone()["n"])
+                metrics["cv_documents"] = int(db.execute("SELECT COUNT(*) AS n FROM cv_documents WHERE user_id=?", (uid,)).fetchone()["n"])
+                metrics["upcoming_interviews"] = int(db.execute("""SELECT COUNT(*) AS n FROM interviews i
+                    JOIN applications a ON a.id=i.application_id
+                    WHERE a.applicant_user_id=? AND i.status='scheduled' AND i.scheduled_at>?""", (uid, utc_now())).fetchone()["n"])
+            elif user["role"] == "employer":
+                metrics["active_jobs"] = int(db.execute("SELECT COUNT(*) AS n FROM jobs WHERE employer_user_id=? AND status='published'", (uid,)).fetchone()["n"])
+                metrics["total_jobs"] = int(db.execute("SELECT COUNT(*) AS n FROM jobs WHERE employer_user_id=?", (uid,)).fetchone()["n"])
+                metrics["applicants"] = int(db.execute("""SELECT COUNT(*) AS n FROM applications a JOIN jobs j ON j.id=a.job_id
+                    WHERE j.employer_user_id=?""", (uid,)).fetchone()["n"])
+                metrics["upcoming_interviews"] = int(db.execute("""SELECT COUNT(*) AS n FROM interviews i
+                    JOIN applications a ON a.id=i.application_id JOIN jobs j ON j.id=a.job_id
+                    WHERE j.employer_user_id=? AND i.status='scheduled' AND i.scheduled_at>?""", (uid, utc_now())).fetchone()["n"])
+            elif user["role"] == "recruiter":
+                metrics["pipeline_candidates"] = int(db.execute("SELECT COUNT(*) AS n FROM recruiter_pipeline_items WHERE recruiter_user_id=?", (uid,)).fetchone()["n"])
+                rows = db.execute("SELECT pipeline_stage,COUNT(*) AS n FROM recruiter_pipeline_items WHERE recruiter_user_id=? GROUP BY pipeline_stage", (uid,)).fetchall()
+                metrics["pipeline_by_stage"] = {row["pipeline_stage"]: int(row["n"]) for row in rows}
+            elif user["role"] == "admin":
+                metrics["users"] = int(db.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"])
+                metrics["jobs"] = int(db.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"])
+                metrics["applications"] = int(db.execute("SELECT COUNT(*) AS n FROM applications").fetchone()["n"])
+                metrics["pending_employers"] = int(db.execute("SELECT COUNT(*) AS n FROM organizations WHERE verification_status='pending'").fetchone()["n"])
+        return jsonify({"data": {"role": user["role"], "full_name": user["full_name"],
+                                 "credits": int(user["credits"]), "metrics": metrics},
+                        "request_id": str(uuid.uuid4())})
+
     @app.get("/api/v1/onboarding")
     @_require_user
     def core_onboarding_status():

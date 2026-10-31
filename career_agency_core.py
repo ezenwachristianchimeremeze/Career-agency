@@ -354,22 +354,43 @@ def register_core_api(app):
 
     @app.before_request
     def career_agency_auth_first():
-        # Existing tests exercise legacy routes in isolation; production defaults to auth-first.
+        # Legacy routes are isolated until their ownership checks are migrated.
         if app.config.get("TESTING"):
             return None
         if request.endpoint == "static" or request.path.startswith("/static/"):
             return None
+        if request.path == "/login":
+            return redirect("/auth/login")
         allowed = (
-            request.path in {"/login", "/auth/login", "/auth/logout"}
+            request.path == "/auth/login"
+            or request.path == "/auth/logout"
             or request.path.startswith("/api/v1/auth/")
             or request.path == "/api/v1/payments/paystack/webhook"
             or request.path.startswith("/health")
         )
-        if allowed or session.get("core_user_id") or session.get("user_id"):
+        if allowed:
             return None
-        if request.path.startswith("/api/"):
-            return _json_error("UNAUTHENTICATED", "Please sign in to continue.", 401)
-        return redirect("/auth/login?next=" + request.path)
+        if not session.get("core_user_id"):
+            if request.path.startswith("/api/"):
+                return _json_error("UNAUTHENTICATED", "Please sign in to continue.", 401)
+            return redirect("/auth/login?next=" + request.path)
+        # Do not expose the legacy shared-data workspace to new accounts until
+        # its user ownership migration is complete and explicitly enabled.
+        if os.environ.get("CAREER_AGENCY_ENABLE_LEGACY_ROUTES") != "1":
+            if request.path.startswith("/api/"):
+                return _json_error("LEGACY_API_DISABLED", "This legacy endpoint is not enabled during migration.", 410)
+            if request.path != "/auth/workspace-unavailable":
+                return redirect("/auth/workspace-unavailable")
+        return None
+
+
+    @app.get("/auth/workspace-unavailable")
+    def core_workspace_unavailable():
+        return """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Workspace update · Career Agency</title><body style="margin:0;background:#080f1e;color:#eef4ff;font-family:system-ui;display:grid;min-height:100vh;place-items:center;padding:24px">
+        <main style="max-width:560px;background:#111d33;border:1px solid #2b3c5d;border-radius:20px;padding:32px">
+        <h1>Workspace migration in progress</h1><p style="color:#aab9d1;line-height:1.6">Your sign-in is active. The legacy workspace is temporarily isolated while its user-owned data and permissions are migrated safely. The new core APIs are available, but the full web and mobile workspaces are not yet complete.</p>
+        <a style="color:#93c5fd" href="/auth/logout">Sign out</a></main></body></html>"""
 
     @app.get("/health/core")
     def core_health():

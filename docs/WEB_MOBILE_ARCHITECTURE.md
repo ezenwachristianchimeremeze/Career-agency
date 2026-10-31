@@ -180,3 +180,16 @@ The UI must not determine access from a locally stored role string.
 - Mobile tests for secure storage, deep links, navigation, permissions and interrupted network.
 - Security review for IDOR, CSRF, XSS, SQL injection, file upload, session fixation, rate limiting, webhook forgery and role escalation.
 - No production readiness claim until CI, migrations, test suite, deployment, payment sandbox and independent security review pass.
+
+
+## 9. Implemented account and onboarding presentation
+
+- Brand mark: inline SVG; it does not depend on an externally hosted logo asset.
+- Display font: Manrope; interface font: DM Sans; system font fallbacks preserve usability offline.
+- Login greeting: “Welcome back.”
+- Login is the first app screen at the root for unauthenticated visitors.
+- Registration, email verification, forgot-password and reset-password use a shared responsive premium auth shell.
+- After verification and sign-in, the user is routed through first-run onboarding.
+- Job seeker, employer and recruiter onboarding fields are role-aware.
+- Legal pages are marked as drafts and must be reviewed before public launch.
+- The native mobile client still needs its own token/refresh lifecycle and UI implementation; the current screens are responsive web experiences.

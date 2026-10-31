@@ -32,8 +32,8 @@ ACTION_BASE_COSTS = {
 # Only the CV cache-hit discount was specified. Other discounts remain disabled.
 ACTION_CACHE_COSTS = {"cv": 10}
 CONFIRMED_PACKAGE_ENDPOINTS = [
-    {"price_kobo": 50_000, "credits": 100, "active": 0},
-    {"price_kobo": 20_000_000, "credits": 120_000, "active": 0},
+    {"price_kobo": 50_000, "credits": 100, "active": 1},
+    {"price_kobo": 20_000_000, "credits": 120_000, "active": 1},
 ]
 
 
@@ -1845,6 +1845,179 @@ def register_core_api(app):
                              "An applicant withdrew their application for " + row["title"] + ".",
                              "/workspace/applications")
         return jsonify({"data": {"withdrawn": True}, "request_id": str(uuid.uuid4())})
+
+    @app.get("/api/v1/interviews")
+    @_require_user
+    def core_interviews_list():
+        user = _current_user()
+        limit = min(max(request.args.get("limit", default=50, type=int), 1), 100)
+        base = """SELECT i.id,i.application_id,i.scheduled_at,i.duration_minutes,i.meeting_url,
+                         i.status,i.created_at,i.updated_at,j.title AS job_title,
+                         a.applicant_user_id,u.full_name AS applicant_name,
+                         j.employer_user_id,e.full_name AS employer_name
+                  FROM interviews i JOIN applications a ON a.id=i.application_id
+                  JOIN jobs j ON j.id=a.job_id
+                  JOIN users u ON u.id=a.applicant_user_id
+                  JOIN users e ON e.id=j.employer_user_id"""
+        with _connect() as db:
+            if user["role"] == "job_seeker":
+                rows = db.execute(base + " WHERE a.applicant_user_id=? ORDER BY i.scheduled_at LIMIT ?",
+                                  (user["id"], limit)).fetchall()
+            elif user["role"] == "employer":
+                rows = db.execute(base + " WHERE j.employer_user_id=? ORDER BY i.scheduled_at LIMIT ?",
+                                  (user["id"], limit)).fetchall()
+            elif user["role"] == "admin":
+                rows = db.execute(base + " ORDER BY i.scheduled_at LIMIT ?", (limit,)).fetchall()
+            else:
+                rows = []
+        return jsonify({"data": [dict(row) for row in rows], "request_id": str(uuid.uuid4())})
+
+    def _parse_interview_datetime(value):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scheduled_at is required.")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("scheduled_at must be a valid ISO-8601 datetime.") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("scheduled_at must include a timezone.")
+        parsed = parsed.astimezone(timezone.utc)
+        if parsed <= datetime.now(timezone.utc):
+            raise ValueError("Interview time must be in the future.")
+        return parsed.isoformat()
+
+    def _interview_conflict(db, application, scheduled_at, duration, exclude_id=None):
+        candidate_id = application["applicant_user_id"]
+        employer_id = application["employer_user_id"]
+        start = datetime.fromisoformat(scheduled_at)
+        end = start + timedelta(minutes=duration)
+        rows = db.execute(
+            """SELECT i.id,i.scheduled_at,i.duration_minutes,a.applicant_user_id,
+                      j.employer_user_id
+               FROM interviews i JOIN applications a ON a.id=i.application_id
+               JOIN jobs j ON j.id=a.job_id
+               WHERE i.status NOT IN ('cancelled','completed')"""
+        ).fetchall()
+        for row in rows:
+            if exclude_id and row["id"] == exclude_id:
+                continue
+            if row["applicant_user_id"] != candidate_id and row["employer_user_id"] != employer_id:
+                continue
+            other_start = datetime.fromisoformat(row["scheduled_at"])
+            other_end = other_start + timedelta(minutes=int(row["duration_minutes"]))
+            if start < other_end and other_start < end:
+                return True
+        return False
+
+    @app.post("/api/v1/interviews")
+    @_require_user
+    def core_interview_create():
+        user = _current_user()
+        if user["role"] not in {"employer", "admin"}:
+            return _json_error("FORBIDDEN", "Only an employer or administrator can schedule an interview.", 403)
+        data = request.get_json(silent=True) or {}
+        application_id = str(data.get("application_id", "")).strip()
+        try:
+            scheduled_at = _parse_interview_datetime(data.get("scheduled_at"))
+        except ValueError as exc:
+            return _json_error("VALIDATION_ERROR", str(exc), 400)
+        try:
+            duration = int(data.get("duration_minutes", 30))
+        except (TypeError, ValueError):
+            return _json_error("VALIDATION_ERROR", "duration_minutes must be a whole number.", 400)
+        if duration < 15 or duration > 240:
+            return _json_error("VALIDATION_ERROR", "Interview duration must be between 15 and 240 minutes.", 400)
+        meeting_url = str(data.get("meeting_url", "")).strip() or None
+        if meeting_url and (len(meeting_url) > 2048 or not meeting_url.startswith("https://")):
+            return _json_error("VALIDATION_ERROR", "Meeting links must use HTTPS and be at most 2,048 characters.", 400)
+        with _connect() as db:
+            application = db.execute(
+                """SELECT a.id,a.applicant_user_id,a.status,j.employer_user_id,j.title
+                   FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.id=?""",
+                (application_id,),
+            ).fetchone()
+            if not application or (user["role"] != "admin" and application["employer_user_id"] != user["id"]):
+                return _json_error("NOT_FOUND", "Application not found.", 404)
+            if application["status"] in {"withdrawn", "rejected"}:
+                return _json_error("INVALID_APPLICATION", "An interview cannot be scheduled for this application.", 409)
+            if _interview_conflict(db, application, scheduled_at, duration):
+                return _json_error("INTERVIEW_CONFLICT", "The candidate or employer already has an overlapping interview.", 409)
+            interview_id, now = str(uuid.uuid4()), utc_now()
+            db.execute(
+                """INSERT INTO interviews(id,application_id,scheduled_at,duration_minutes,meeting_url,status,created_at,updated_at)
+                   VALUES(?,?,?,?,?,'scheduled',?,?)""",
+                (interview_id, application_id, scheduled_at, duration, meeting_url, now, now),
+            )
+        _create_notification(application["applicant_user_id"], "interview", "Interview scheduled",
+                             "An interview has been scheduled for " + application["title"] + ".",
+                             "/workspace/interviews")
+        _audit(user["id"], "interview.scheduled", "interview", interview_id, "success",
+               {"application_id": application_id, "scheduled_at": scheduled_at})
+        return jsonify({"data": {"id": interview_id, "status": "scheduled",
+                                 "scheduled_at": scheduled_at},
+                        "request_id": str(uuid.uuid4())}), 201
+
+    @app.patch("/api/v1/interviews/<interview_id>")
+    @_require_user
+    def core_interview_update(interview_id):
+        user = _current_user()
+        data = request.get_json(silent=True) or {}
+        allowed_statuses = {"scheduled", "confirmed", "completed", "cancelled"}
+        with _connect() as db:
+            row = db.execute(
+                """SELECT i.*,a.applicant_user_id,j.employer_user_id,j.title
+                   FROM interviews i JOIN applications a ON a.id=i.application_id
+                   JOIN jobs j ON j.id=a.job_id WHERE i.id=?""",
+                (interview_id,),
+            ).fetchone()
+            if not row or (user["role"] != "admin" and row["employer_user_id"] != user["id"]):
+                return _json_error("NOT_FOUND", "Interview not found.", 404)
+            scheduled_at = row["scheduled_at"]
+            duration = int(row["duration_minutes"])
+            meeting_url = row["meeting_url"]
+            status = row["status"]
+            if "scheduled_at" in data:
+                try:
+                    scheduled_at = _parse_interview_datetime(data["scheduled_at"])
+                except ValueError as exc:
+                    return _json_error("VALIDATION_ERROR", str(exc), 400)
+            if "duration_minutes" in data:
+                try:
+                    duration = int(data["duration_minutes"])
+                except (TypeError, ValueError):
+                    return _json_error("VALIDATION_ERROR", "duration_minutes must be a whole number.", 400)
+                if duration < 15 or duration > 240:
+                    return _json_error("VALIDATION_ERROR", "Interview duration must be between 15 and 240 minutes.", 400)
+            if "meeting_url" in data:
+                meeting_url = str(data["meeting_url"]).strip() or None
+                if meeting_url and (len(meeting_url) > 2048 or not meeting_url.startswith("https://")):
+                    return _json_error("VALIDATION_ERROR", "Meeting links must use HTTPS and be at most 2,048 characters.", 400)
+            if "status" in data:
+                status = str(data["status"])
+                if status not in allowed_statuses:
+                    return _json_error("VALIDATION_ERROR", "Choose a valid interview status.", 400)
+            if row["status"] in {"cancelled", "completed"} and status != row["status"]:
+                return _json_error("INVALID_TRANSITION", "A completed or cancelled interview cannot be reopened.", 409)
+            application = {"applicant_user_id": row["applicant_user_id"],
+                           "employer_user_id": row["employer_user_id"]}
+            if status not in {"cancelled", "completed"} and _interview_conflict(
+                db, application, scheduled_at, duration, exclude_id=interview_id
+            ):
+                return _json_error("INTERVIEW_CONFLICT", "The candidate or employer already has an overlapping interview.", 409)
+            db.execute(
+                """UPDATE interviews SET scheduled_at=?,duration_minutes=?,meeting_url=?,status=?,updated_at=?
+                   WHERE id=?""",
+                (scheduled_at, duration, meeting_url, status, utc_now(), interview_id),
+            )
+        _audit(user["id"], "interview.updated", "interview", interview_id, "success",
+               {"status": status, "scheduled_at": scheduled_at})
+        if status == "cancelled":
+            _create_notification(row["applicant_user_id"], "interview", "Interview cancelled",
+                                 "The interview for " + row["title"] + " has been cancelled.",
+                                 "/workspace/interviews")
+        return jsonify({"data": {"updated": True, "status": status,
+                                 "scheduled_at": scheduled_at, "duration_minutes": duration},
+                        "request_id": str(uuid.uuid4())})
 
     @app.get("/api/v1/dashboard")
     @_require_user
